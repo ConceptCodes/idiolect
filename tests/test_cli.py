@@ -130,3 +130,65 @@ def test_cli_store_lifecycle(tmp_path: Path, monkeypatch):
     # 6. Delete again (should fail)
     res_delete_again = runner.invoke(app, ["delete", "Arthur"])
     assert res_delete_again.exit_code != 0
+
+
+def test_cli_guess_no_candidates(tmp_path: Path, monkeypatch):
+    test_db = tmp_path / "empty.db"
+    import idiolect.store
+
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    essay = tmp_path / "essay.txt"
+    essay.write_text("An anonymous paper on thermodynamics and molecular kinetics.")
+    res = runner.invoke(app, ["guess", str(essay)])
+    assert res.exit_code != 0
+    assert "No students or authors enrolled" in res.output
+
+
+def test_cli_guess_and_identify_success(tmp_path: Path, monkeypatch):
+    test_db = tmp_path / "students.db"
+    import idiolect.store
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    # Enroll Student A (Alice) and Student B (Bob)
+    sample_a = tmp_path / "alice.txt"
+    sample_b = tmp_path / "bob.txt"
+    sample_a.write_text(
+        "In our tranquil laboratory, the morning fog hung low over the glassware. "
+        "Eleanor hurried past the rows of test tubes, clutching an unread manuscript."
+    )
+    sample_b.write_text(
+        "Computational systems demonstrate profound variance across distributed cluster "
+        "environments. Latency profiles degrade proportionally as concurrency exceeds limits."
+    )
+
+    runner.invoke(app, ["enroll", "Alice", str(sample_a)])
+    runner.invoke(app, ["enroll", "Bob", str(sample_b)])
+
+    # Mystery essay written in Alice's literary style
+    unknown_essay = tmp_path / "submission.txt"
+    unknown_essay.write_text(
+        "Through the quiet village streets, Eleanor wandered among the shuttered workshops, "
+        "wondering if the whispers from the northern harbor could possibly be true."
+    )
+
+    # Test guess
+    res_guess = runner.invoke(app, ["guess", str(unknown_essay)])
+    assert res_guess.exit_code == 0
+    assert "AUTHOR IDENTIFICATION / GUESS" in res_guess.output
+    assert "Top Guess: Alice" in res_guess.output
+    assert "Candidate Ranking" in res_guess.output
+    assert (tmp_path / "artifacts" / "guess_submission_Alice.pdf").exists()
+
+    # Test identify alias with --no-report
+    res_id = runner.invoke(app, ["identify", str(unknown_essay), "--no-report"])
+    assert res_id.exit_code == 0
+    assert "Top Guess: Alice" in res_id.output

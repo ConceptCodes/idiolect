@@ -296,6 +296,146 @@ def verify(
     )
 
 
+@app.command()
+def guess(
+    file: Path = typer.Argument(
+        ...,
+        help="Path to the essay/text file whose author to guess.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    top_k: int = typer.Option(
+        5, "--top-k", "-k", help="Maximum number of candidate matches to display."
+    ),
+    output: Path = typer.Option(
+        Path("artifacts"),
+        "--output",
+        "-o",
+        help="Output directory for the PDF comparison report (default: 'artifacts').",
+    ),
+    no_report: bool = typer.Option(
+        False, "--no-report", help="Skip generating a PDF comparison report for the top match."
+    ),
+):
+    """Guess which enrolled student/author wrote an essay based on stylometric similarity."""
+    store = get_store()
+    enrolled_candidates = store.get_all()
+
+    if not enrolled_candidates:
+        console.print("[bold red]Error:[/] No students or authors enrolled in the database.")
+        console.print(
+            "Enroll candidates first using: [cyan]idiolect enroll <name> <sample.txt>[/cyan]"
+        )
+        raise typer.Exit(1)
+
+    with Progress(
+        SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
+    ) as progress:
+        progress.add_task(
+            description=(
+                f"Evaluating [cyan]{file.name}[/cyan] against "
+                f"{len(enrolled_candidates)} candidate profiles..."
+            ),
+            total=None,
+        )
+        doc = ingest_file(file)
+        essay_fp = create_fingerprint(doc, label=file.stem)
+
+        candidate_scores = []
+        for cand_fp in enrolled_candidates:
+            comp = compare_fingerprints(cand_fp, essay_fp)
+            candidate_scores.append((cand_fp, comp))
+
+    # Rank by cosine similarity descending
+    candidate_scores.sort(key=lambda x: x[1].cosine_similarity, reverse=True)
+
+    best_candidate_fp, best_comp = candidate_scores[0]
+    best_sim_pct = best_comp.cosine_similarity * 100
+    color = "green" if best_sim_pct >= 80 else ("yellow" if best_sim_pct >= 60 else "red")
+
+    margin_text = ""
+    if len(candidate_scores) > 1:
+        runner_up_fp, runner_up_comp = candidate_scores[1]
+        runner_up_pct = runner_up_comp.cosine_similarity * 100
+        margin = best_sim_pct - runner_up_pct
+        margin_text = (
+            f"\nMargin: [bold]+{margin:.1f}%[/bold] lead over 2nd place "
+            f"([cyan]{runner_up_fp.label}[/cyan] at {runner_up_pct:.1f}%)"
+        )
+
+    header_text = (
+        f"📄 Essay: [bold]{file.name}[/bold] ({essay_fp.word_count:,} words)\n"
+        f"👥 Enrolled Candidates Evaluated: {len(enrolled_candidates)}\n\n"
+        f"🏆 Top Guess: [{color} bold]{best_candidate_fp.label}[/]\n"
+        f"Match Confidence: [{color} bold]{best_sim_pct:.1f}%[/] "
+        f"({best_comp.same_author_likelihood.replace('_', ' ').title()})"
+        f"{margin_text}"
+    )
+    console.print(
+        Panel(header_text, title="AUTHOR IDENTIFICATION / GUESS", expand=False, padding=(1, 2))
+    )
+
+    # Candidate table
+    table = Table(
+        title=f"Candidate Ranking (Top {min(top_k, len(candidate_scores))})",
+        show_header=True,
+        header_style="bold magenta",
+    )
+    table.add_column("Rank", style="dim", justify="right")
+    table.add_column("Student / Author", style="cyan")
+    table.add_column("Similarity", justify="left")
+    table.add_column("Burrows Δ", justify="right")
+    table.add_column("Verdict", justify="left")
+
+    for rank, (cand_fp, comp) in enumerate(candidate_scores[:top_k], start=1):
+        sim = comp.cosine_similarity * 100
+        bar = draw_bar(sim, width=15)
+        sim_col = f"{sim:5.1f}%  {bar}"
+        delta_str = f"{comp.manhattan_delta:.3f}"
+        verdict = comp.same_author_likelihood.replace("_", " ").title()
+
+        rank_badge = f"[bold yellow]#{rank}[/]" if rank == 1 else f"#{rank}"
+        table.add_row(rank_badge, cand_fp.label, sim_col, delta_str, verdict)
+
+    console.print(table)
+
+    if not no_report:
+        output.mkdir(parents=True, exist_ok=True)
+        safe_name = best_candidate_fp.label.replace(" ", "_")
+        pdf_path = output / f"guess_{file.stem}_{safe_name}.pdf"
+        generate_comparison_report(best_comp, best_candidate_fp, essay_fp, pdf_path)
+        console.print(f"\n  📋 Comparison report with top candidate saved: [cyan]{pdf_path}[/cyan]")
+
+
+@app.command(name="identify")
+def identify(
+    file: Path = typer.Argument(
+        ...,
+        help="Path to the essay/text file whose author to guess.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    top_k: int = typer.Option(
+        5, "--top-k", "-k", help="Maximum number of candidate matches to display."
+    ),
+    output: Path = typer.Option(
+        Path("artifacts"),
+        "--output",
+        "-o",
+        help="Output directory for the PDF comparison report (default: 'artifacts').",
+    ),
+    no_report: bool = typer.Option(
+        False, "--no-report", help="Skip generating a PDF comparison report for the top match."
+    ),
+):
+    """Alias for 'guess' — identify which enrolled student/author wrote an essay."""
+    return guess(file=file, top_k=top_k, output=output, no_report=no_report)
+
+
 @app.command(name="list")
 def list_fingerprints():
     """List all enrolled fingerprints."""
