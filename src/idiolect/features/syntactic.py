@@ -63,9 +63,10 @@ def extract_syntactic(doc: Document) -> dict[str, float]:
 
     # Dependency features
     def get_tree_depth(token):
-        if not list(token.children):
+        children = list(token.children)
+        if not children:
             return 0
-        return 1 + max(get_tree_depth(child) for child in token.children)
+        return 1 + max(get_tree_depth(child) for child in children)
 
     tree_depths = []
     arc_lengths = []

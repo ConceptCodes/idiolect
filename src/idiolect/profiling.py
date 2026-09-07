@@ -148,14 +148,21 @@ def aggregate_fingerprints(
     ai_score = sum(
         agg_ai_indicators.get(k, 0.0) * calibration_weights.get(k, 0.0) for k in calibration_weights
     )
-    if ai_score >= 0.60:
+    total_words = sum(fp.word_count for fp in fps)
+    total_sentences = sum(fp.sentence_count for fp in fps)
+
+    if total_words < 25 or total_sentences < 2:
+        author_type = AuthorType.UNCERTAIN
+        ai_confidence = 0.0
+    elif ai_score >= 0.60:
         author_type = AuthorType.AI
+        ai_confidence = min(1.0, abs(ai_score - 0.5) * 2.2)
     elif ai_score <= 0.40:
         author_type = AuthorType.HUMAN
+        ai_confidence = min(1.0, abs(ai_score - 0.5) * 2.2)
     else:
         author_type = AuthorType.UNCERTAIN
-
-    ai_confidence = min(1.0, abs(ai_score - 0.5) * 2.2)
+        ai_confidence = min(1.0, abs(ai_score - 0.5) * 2.2)
 
     # 5. Standout traits evaluated from aggregated features against POPULATION_STATS
     standout_traits = []
@@ -169,9 +176,6 @@ def aggregate_fingerprints(
                     {"feature": k, "value": v, "z_score": z, "interpretation": desc}
                 )
     standout_traits.sort(key=lambda x: abs(x["z_score"]), reverse=True)
-
-    total_words = sum(fp.word_count for fp in fps)
-    total_sentences = sum(fp.sentence_count for fp in fps)
 
     return Fingerprint(
         label=label,

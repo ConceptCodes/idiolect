@@ -81,20 +81,21 @@ def compare(fp_a: Fingerprint, fp_b: Fingerprint) -> ComparisonResult:
     cosine_similarity = 0.60 * delta_score + 0.40 * axis_score
     cosine_delta = 1.0 - max(0.0, z_cos_sim)
 
-    # 5. Identify 5 most similar and 5 most divergent features
+    # 5. Identify up to 5 most similar and most divergent features (must have diff > 0.01)
     feature_diffs.sort(key=lambda x: x[1])
     most_similar_features = [k for k, _ in feature_diffs[:5]]
-    most_divergent_features = [k for k, _ in feature_diffs[-5:]]
-    most_divergent_features.reverse()  # Largest difference first
+    divergent_pool = [k for k, diff in reversed(feature_diffs) if diff > 0.01]
+    most_divergent_features = divergent_pool[:5]
 
     # 6. Determine same_author_likelihood (stylometric decision boundary)
-    if manhattan_delta <= 0.80 and mean_axis_delta <= 9.0:
+    # Balanced composite scoring aligned with similarity percentage
+    if cosine_similarity >= 0.80 and manhattan_delta <= 1.0:
         same_author = "very_likely"
-    elif manhattan_delta <= 1.15 and mean_axis_delta <= 15.0:
+    elif cosine_similarity >= 0.65 and manhattan_delta <= 1.35:
         same_author = "likely"
-    elif manhattan_delta <= 1.55 and mean_axis_delta <= 22.0:
+    elif cosine_similarity >= 0.50 and manhattan_delta <= 1.70:
         same_author = "uncertain"
-    elif manhattan_delta <= 1.95:
+    elif cosine_similarity >= 0.35 or manhattan_delta <= 1.95:
         same_author = "unlikely"
     else:
         same_author = "very_unlikely"

@@ -16,10 +16,17 @@ class FingerprintStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    def _get_connection(self) -> sqlite3.Connection:
+        """Create a resilient SQLite connection with timeout and busy_timeout configured."""
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        return conn
+
     def _init_db(self) -> None:
         """Create tables for fingerprints and author samples, migrating schema if needed."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("PRAGMA journal_mode = WAL;")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS fingerprints (
@@ -100,7 +107,7 @@ class FingerprintStore:
             The newly synthesized composite Fingerprint.
         """
         sample_name = sample_label or fingerprint.source_path or fingerprint.label or "Sample"
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
             if replace:
                 cursor.execute("DELETE FROM author_samples WHERE author_label = ?", (author_label,))
@@ -173,7 +180,7 @@ class FingerprintStore:
         if not samples:
             raise ValueError("No samples provided for enrollment.")
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
             if replace:
                 cursor.execute("DELETE FROM author_samples WHERE author_label = ?", (author_label,))
@@ -235,7 +242,7 @@ class FingerprintStore:
 
     def get(self, label: str) -> Fingerprint | None:
         """Retrieve the composite fingerprint by author label."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT fingerprint_json FROM fingerprints WHERE label = ?", (label,))
             row = cursor.fetchone()
@@ -245,7 +252,7 @@ class FingerprintStore:
 
     def get_samples(self, author_label: str) -> list[AuthorSample]:
         """Retrieve all individual enrolled samples for an author."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -273,32 +280,93 @@ class FingerprintStore:
             return samples
 
     def get_profile(self, author_label: str) -> AuthorProfile | None:
-        """Retrieve complete AuthorProfile including composite fingerprint and all samples."""
-        comp_fp = self.get(author_label)
-        if not comp_fp:
-            return None
-        samples = self.get_samples(author_label)
-        return AuthorProfile(
-            label=author_label,
-            composite_fingerprint=comp_fp,
-            samples=samples,
-        )
+        """Retrieve complete AuthorProfile using a single database connection."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT fingerprint_json FROM fingerprints WHERE label = ?", (author_label,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            comp_fp = Fingerprint.from_json(row[0])
+
+            cursor.execute(
+                """
+                SELECT id, author_label, sample_label, fingerprint_json, word_count, enrolled_at
+                FROM author_samples
+                WHERE author_label = ?
+                ORDER BY id ASC
+                """,
+                (author_label,),
+            )
+            samples = []
+            for s_row in cursor.fetchall():
+                sid, albl, slbl, fp_json, wc, eat = s_row
+                samples.append(
+                    AuthorSample(
+                        id=sid,
+                        author_label=albl,
+                        sample_label=slbl,
+                        word_count=wc,
+                        enrolled_at=eat,
+                        fingerprint=Fingerprint.from_json(fp_json),
+                    )
+                )
+            return AuthorProfile(
+                label=author_label,
+                composite_fingerprint=comp_fp,
+                samples=samples,
+            )
 
     def list_all(self) -> list[str]:
         """List all enrolled fingerprint labels."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT label FROM fingerprints ORDER BY label")
             return [row[0] for row in cursor.fetchall()]
 
     def list_profiles(self) -> list[AuthorProfile]:
-        """Retrieve all enrolled author profiles."""
-        labels = self.list_all()
+        """Retrieve all enrolled author profiles in a single batched query."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT label, fingerprint_json FROM fingerprints ORDER BY label")
+            fp_rows = cursor.fetchall()
+            if not fp_rows:
+                return []
+
+            cursor.execute(
+                """
+                SELECT id, author_label, sample_label, fingerprint_json, word_count, enrolled_at
+                FROM author_samples
+                ORDER BY id ASC
+                """
+            )
+            sample_rows = cursor.fetchall()
+
+        samples_by_author: dict[str, list[AuthorSample]] = {}
+        for row in sample_rows:
+            sid, albl, slbl, fp_json, wc, eat = row
+            s = AuthorSample(
+                id=sid,
+                author_label=albl,
+                sample_label=slbl,
+                word_count=wc,
+                enrolled_at=eat,
+                fingerprint=Fingerprint.from_json(fp_json),
+            )
+            samples_by_author.setdefault(albl, []).append(s)
+
         profiles = []
-        for lbl in labels:
-            prof = self.get_profile(lbl)
-            if prof:
-                profiles.append(prof)
+        for lbl, fp_json in fp_rows:
+            comp_fp = Fingerprint.from_json(fp_json)
+            profiles.append(
+                AuthorProfile(
+                    label=lbl,
+                    composite_fingerprint=comp_fp,
+                    samples=samples_by_author.get(lbl, []),
+                )
+            )
         return profiles
 
     def delete(self, label: str) -> bool:
@@ -306,7 +374,7 @@ class FingerprintStore:
 
         Returns True if found and deleted.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM fingerprints WHERE label = ?", (label,))
             deleted = cursor.rowcount > 0
@@ -319,7 +387,7 @@ class FingerprintStore:
 
         Returns updated composite Fingerprint, or None if author was deleted (0 samples left).
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM author_samples WHERE id = ? AND author_label = ?",
@@ -360,7 +428,7 @@ class FingerprintStore:
 
     def get_all(self) -> list[Fingerprint]:
         """Retrieve all enrolled fingerprints."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT fingerprint_json FROM fingerprints ORDER BY label")
             return [Fingerprint.from_json(row[0]) for row in cursor.fetchall()]

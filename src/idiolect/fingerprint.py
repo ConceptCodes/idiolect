@@ -232,12 +232,19 @@ def create_fingerprint(doc: Document, label: str) -> Fingerprint:
     }
 
     ai_score = sum(ai_indicators[k] * weights[k] for k in ai_indicators)
-    if ai_score >= 0.60:
+    if doc.word_count < 25 or doc.sentence_count < 2:
+        # Insufficient statistical sample for reliable AI vs Human stylometric detection
+        author_type = AuthorType.UNCERTAIN
+        ai_confidence = 0.0
+    elif ai_score >= 0.60:
         author_type = AuthorType.AI
+        ai_confidence = min(1.0, abs(ai_score - 0.5) * 2.2)
     elif ai_score <= 0.40:
         author_type = AuthorType.HUMAN
+        ai_confidence = min(1.0, abs(ai_score - 0.5) * 2.2)
     else:
         author_type = AuthorType.UNCERTAIN
+        ai_confidence = min(1.0, abs(ai_score - 0.5) * 2.2)
 
     return Fingerprint(
         label=label,
@@ -249,7 +256,7 @@ def create_fingerprint(doc: Document, label: str) -> Fingerprint:
         standout_traits=standout_traits,
         ai_indicators=ai_indicators,
         author_type=author_type,
-        ai_confidence=min(1.0, abs(ai_score - 0.5) * 2.2),
+        ai_confidence=ai_confidence,
     )
 
 

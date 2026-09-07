@@ -118,6 +118,7 @@ def analyze(
             raise typer.Exit(1)
 
         batch_results = []
+        skipped_files: list[tuple[Path, str]] = []
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -127,16 +128,27 @@ def analyze(
             task = progress.add_task(f"Analyzing {len(files)} documents...", total=len(files))
             for f in files:
                 progress.update(task, description=f"Analyzing [cyan]{f.name}[/cyan]...")
-                doc = ingest_file(f)
-                fp = create_fingerprint(doc, label=f.stem)
+                try:
+                    doc = ingest_file(f)
+                    fp = create_fingerprint(doc, label=f.stem)
 
-                if not no_report:
-                    output.mkdir(parents=True, exist_ok=True)
-                    pdf_path = output / f"{f.stem}_fingerprint.pdf"
-                    generate_report(fp, pdf_path)
+                    if not no_report:
+                        output.mkdir(parents=True, exist_ok=True)
+                        pdf_path = output / f"{f.stem}_fingerprint.pdf"
+                        generate_report(fp, pdf_path)
 
-                batch_results.append((f, doc, fp))
-                progress.advance(task)
+                    batch_results.append((f, doc, fp))
+                except Exception as err:
+                    skipped_files.append((f, str(err)))
+                finally:
+                    progress.advance(task)
+
+        if not batch_results:
+            console.print(f"[bold red]Error:[/] Could not analyze any documents in: {path}")
+            if skipped_files:
+                for f, err in skipped_files:
+                    console.print(f"  • [yellow]{f.name}:[/] {err}")
+            raise typer.Exit(1)
 
         if out_format == "json":
             batch_data = [
@@ -254,12 +266,18 @@ def analyze(
             if short_count > 0
             else ""
         )
+        skip_note = (
+            f"\n⚠️  [yellow]Skipped {len(skipped_files)} unreadable/corrupted file(s)[/yellow]"
+            if skipped_files
+            else ""
+        )
         summary_text = (
             f"📂 Processed Directory: [bold]{path}[/bold]\n"
-            f"📄 Documents Analyzed: {len(files)}  |  Total Words: {total_words:,}\n\n"
+            f"📄 Documents Analyzed: {len(batch_results)}  |  Total Words: {total_words:,}\n\n"
             f"Classification Breakdown: [green bold]{human_count} Human[/], "
             f"[red bold]{ai_count} AI[/], [yellow bold]{uncertain_count} Uncertain[/]"
             f"{short_note}"
+            f"{skip_note}"
         )
         if not no_report:
             summary_text += f"\n📋 PDF Reports Saved: [cyan]{output}[/cyan]"
@@ -586,6 +604,7 @@ def enroll(
             raise typer.Exit(1)
 
         samples = []
+        skipped_files: list[tuple[Path, str]] = []
         with Progress(
             SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
         ) as progress:
@@ -594,10 +613,21 @@ def enroll(
             )
             for f in files:
                 progress.update(task, description=f"Analyzing [cyan]{f.name}[/cyan]...")
-                doc = ingest_file(f)
-                fp = create_fingerprint(doc, label=f.stem)
-                samples.append((f.name, fp))
-                progress.advance(task)
+                try:
+                    doc = ingest_file(f)
+                    fp = create_fingerprint(doc, label=f.stem)
+                    samples.append((f.name, fp))
+                except Exception as err:
+                    skipped_files.append((f, str(err)))
+                finally:
+                    progress.advance(task)
+
+            if not samples:
+                console.print(f"[bold red]Error:[/] No samples could be ingested from: {path}")
+                if skipped_files:
+                    for f, err in skipped_files:
+                        console.print(f"  • [yellow]{f.name}:[/] {err}")
+                raise typer.Exit(1)
 
             composite_fp = store.enroll_samples(
                 author_label=name,
@@ -607,12 +637,18 @@ def enroll(
             )
 
         added_words = sum(fp.word_count for _, fp in samples)
+        skip_line = (
+            f"\n  ⚠️  Skipped [yellow]{len(skipped_files)}[/yellow] unreadable file(s)"
+            if skipped_files
+            else ""
+        )
         console.print(
             f"[bold green]✓ Successfully enrolled author profile:[/bold green] "
             f"[bold cyan]{name}[/bold cyan]\n"
-            f"  📂 Ingested {len(files)} samples ({added_words:,} words added)\n"
+            f"  📂 Ingested {len(samples)} samples ({added_words:,} words added)\n"
             f"  📈 Rolling Baseline: [bold]{composite_fp.sample_count} samples[/bold]  |  "
             f"[bold]{composite_fp.word_count:,} total words[/bold] (decay={decay:.2f})"
+            f"{skip_line}"
         )
         return
 
@@ -690,6 +726,7 @@ def verify(
             raise typer.Exit(1)
 
         batch_results = []
+        skipped_files: list[tuple[Path, str]] = []
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -701,11 +738,22 @@ def verify(
             )
             for f in files:
                 progress.update(task, description=f"Verifying [cyan]{f.name}[/cyan]...")
-                doc = ingest_file(f)
-                new_fingerprint = create_fingerprint(doc, label=f.stem)
-                comp = compare_fingerprints(enrolled, new_fingerprint)
-                batch_results.append((f, doc, new_fingerprint, comp))
-                progress.advance(task)
+                try:
+                    doc = ingest_file(f)
+                    new_fingerprint = create_fingerprint(doc, label=f.stem)
+                    comp = compare_fingerprints(enrolled, new_fingerprint)
+                    batch_results.append((f, doc, new_fingerprint, comp))
+                except Exception as err:
+                    skipped_files.append((f, str(err)))
+                finally:
+                    progress.advance(task)
+
+        if not batch_results:
+            console.print(f"[bold red]Error:[/] Could not verify any documents in: {path}")
+            if skipped_files:
+                for f, err in skipped_files:
+                    console.print(f"  • [yellow]{f.name}:[/] {err}")
+            raise typer.Exit(1)
 
         if out_format == "json":
             batch_data = [
@@ -803,12 +851,18 @@ def verify(
             if short_count > 0
             else ""
         )
+        skip_note = (
+            f"\n⚠️  [yellow]Skipped {len(skipped_files)} unreadable/corrupted file(s)[/yellow]"
+            if skipped_files
+            else ""
+        )
         console.print(
             Panel(
                 f"👤 Enrolled Author: [bold]{name}[/bold]{sample_info}\n"
-                f"📂 Directory: [bold]{path}[/bold] ({len(files)} documents)\n"
-                f"🎯 Strong Matches: [bold green]{matched_count}/{len(files)}[/bold green]"
-                f"{short_note}",
+                f"📂 Directory: [bold]{path}[/bold] ({len(batch_results)} documents)\n"
+                f"🎯 Strong Matches: [bold green]{matched_count}/{len(batch_results)}[/bold green]"
+                f"{short_note}"
+                f"{skip_note}",
                 title="BATCH VERIFICATION COMPLETE",
                 expand=False,
                 padding=(1, 2),
@@ -965,6 +1019,7 @@ def identify(
             raise typer.Exit(1)
 
         batch_identifications = []
+        skipped_files: list[tuple[Path, str]] = []
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -976,54 +1031,65 @@ def identify(
             )
             for f in files:
                 progress.update(task, description=f"Evaluating [cyan]{f.name}[/cyan]...")
-                doc = ingest_file(f)
-                essay_fp = create_fingerprint(doc, label=f.stem)
+                try:
+                    doc = ingest_file(f)
+                    essay_fp = create_fingerprint(doc, label=f.stem)
 
-                candidate_scores = []
-                for cand_fp in enrolled_candidates:
-                    comp = compare_fingerprints(cand_fp, essay_fp)
-                    candidate_scores.append((cand_fp, comp))
+                    candidate_scores = []
+                    for cand_fp in enrolled_candidates:
+                        comp = compare_fingerprints(cand_fp, essay_fp)
+                        candidate_scores.append((cand_fp, comp))
 
-                candidate_scores.sort(key=lambda x: x[1].cosine_similarity, reverse=True)
-                best_cand_fp, best_comp = candidate_scores[0]
-                raw_sim_pct = best_comp.cosine_similarity * 100
+                    candidate_scores.sort(key=lambda x: x[1].cosine_similarity, reverse=True)
+                    best_cand_fp, best_comp = candidate_scores[0]
+                    raw_sim_pct = best_comp.cosine_similarity * 100
 
-                # Length check & proportional damping
-                is_short = essay_fp.word_count < MIN_RELIABLE_WORDS
-                damping = compute_length_damping(essay_fp.word_count)
-                damped_sim_pct = raw_sim_pct * damping
+                    # Length check & proportional damping
+                    is_short = essay_fp.word_count < MIN_RELIABLE_WORDS
+                    damping = compute_length_damping(essay_fp.word_count)
+                    damped_sim_pct = raw_sim_pct * damping
 
-                margin = None
-                if len(candidate_scores) > 1:
-                    runner_up_fp, runner_up_comp = candidate_scores[1]
-                    runner_up_pct = runner_up_comp.cosine_similarity * 100 * damping
-                    margin = damped_sim_pct - runner_up_pct
+                    margin = None
+                    if len(candidate_scores) > 1:
+                        runner_up_fp, runner_up_comp = candidate_scores[1]
+                        runner_up_pct = runner_up_comp.cosine_similarity * 100 * damping
+                        margin = damped_sim_pct - runner_up_pct
 
-                # Explainability: top 3 aligning traits
-                aligning_traits = explain_aligning_traits(best_cand_fp, essay_fp, top_n=3)
-                traits_summary = format_aligning_traits_summary(aligning_traits)
+                    # Explainability: top 3 aligning traits
+                    aligning_traits = explain_aligning_traits(best_cand_fp, essay_fp, top_n=3)
+                    traits_summary = format_aligning_traits_summary(aligning_traits)
 
-                if not no_report:
-                    output.mkdir(parents=True, exist_ok=True)
-                    safe_name = best_cand_fp.label.replace(" ", "_")
-                    pdf_path = output / f"identify_{f.stem}_{safe_name}.pdf"
-                    generate_comparison_report(best_comp, best_cand_fp, essay_fp, pdf_path)
+                    if not no_report:
+                        output.mkdir(parents=True, exist_ok=True)
+                        safe_name = best_cand_fp.label.replace(" ", "_")
+                        pdf_path = output / f"identify_{f.stem}_{safe_name}.pdf"
+                        generate_comparison_report(best_comp, best_cand_fp, essay_fp, pdf_path)
 
-                batch_identifications.append(
-                    (
-                        f,
-                        essay_fp,
-                        best_cand_fp,
-                        best_comp,
-                        margin,
-                        is_short,
-                        raw_sim_pct,
-                        damped_sim_pct,
-                        aligning_traits,
-                        traits_summary,
+                    batch_identifications.append(
+                        (
+                            f,
+                            essay_fp,
+                            best_cand_fp,
+                            best_comp,
+                            margin,
+                            is_short,
+                            raw_sim_pct,
+                            damped_sim_pct,
+                            aligning_traits,
+                            traits_summary,
+                        )
                     )
-                )
-                progress.advance(task)
+                except Exception as err:
+                    skipped_files.append((f, str(err)))
+                finally:
+                    progress.advance(task)
+
+        if not batch_identifications:
+            console.print(f"[bold red]Error:[/] Could not identify any submissions in: {path}")
+            if skipped_files:
+                for f, err in skipped_files:
+                    console.print(f"  • [yellow]{f.name}:[/] {err}")
+            raise typer.Exit(1)
 
         if out_format == "json":
             batch_data = [
@@ -1178,12 +1244,18 @@ def identify(
             if short_count > 0
             else ""
         )
+        skip_note = (
+            f"\n⚠️  [yellow]Skipped {len(skipped_files)} unreadable file(s)[/yellow]"
+            if skipped_files
+            else ""
+        )
         summary_text = (
             f"📂 Processed Directory: [bold]{path}[/bold]\n"
-            f"📄 Submissions Evaluated: {len(files)} "
+            f"📄 Submissions Evaluated: {len(batch_identifications)} "
             f"against {len(enrolled_candidates)} candidates\n\n"
             f"Identified Distribution: {summary_breakdown}"
             f"{short_note}"
+            f"{skip_note}"
         )
         if not no_report:
             summary_text += f"\n📋 PDF Reports Saved: [cyan]{output}[/cyan]"

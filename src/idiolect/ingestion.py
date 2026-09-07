@@ -221,23 +221,25 @@ SUPPORTED_EXTENSIONS = {
 }
 
 
-def find_text_files(path: Path) -> list[Path]:
+def find_text_files(path: Path, recursive: bool = True) -> list[Path]:
     """Find all supported documents from a single file or directory.
 
     Supported extensions: .txt, .md, .text, .markdown, .rst, .docx, .pdf.
+    If recursive is True, searches nested subdirectories (excluding hidden folders).
     """
     path = Path(path)
     if path.is_file():
         return [path]
     if path.is_dir():
+        iterator = path.rglob("*") if recursive else path.iterdir()
         files = [
             p
-            for p in path.iterdir()
+            for p in iterator
             if p.is_file()
-            and not p.name.startswith(".")
+            and not any(part.startswith(".") for part in p.relative_to(path).parts)
             and (p.suffix.lower() in SUPPORTED_EXTENSIONS or not p.suffix)
         ]
-        return sorted(files, key=lambda p: p.name.lower())
+        return sorted(files, key=lambda p: str(p.relative_to(path)).lower())
     return []
 
 
