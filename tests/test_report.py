@@ -37,3 +37,26 @@ def test_generate_comparison_report_pdf(tmp_path: Path):
     with open(result_path, "rb") as f:
         header = f.read(5)
     assert header == b"%PDF-"
+
+
+def test_generate_report_default_output(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    text = "The quick brown fox jumps gracefully over the sleepy dog."
+    fp = create_fingerprint_from_text(text, label="DefaultTest")
+    result_path = generate_report(fp)
+    assert result_path == Path("artifacts/DefaultTest_fingerprint.pdf")
+    assert result_path.exists()
+    assert result_path.stat().st_size > 1000
+
+
+def test_generate_comparison_report_default_output(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    text1 = "The quick brown fox jumps gracefully over the sleepy dog."
+    text2 = "A fast auburn fox leapt effortlessly above the resting hound."
+    fp1 = create_fingerprint_from_text(text1, label="Doc1")
+    fp2 = create_fingerprint_from_text(text2, label="Doc2")
+    comp = compare(fp1, fp2)
+    result_path = generate_comparison_report(comp, fp1, fp2)
+    assert result_path == Path("artifacts/compare_Doc1_Doc2.pdf")
+    assert result_path.exists()
+    assert result_path.stat().st_size > 1000

@@ -65,6 +65,28 @@ def test_cli_compare(tmp_path: Path):
     assert "Axis Deltas" in result.output
 
 
+def test_cli_analyze_default_artifacts(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    sample = tmp_path / "stream.txt"
+    sample.write_text("A crystal mountain stream tumbled over smooth granite rocks in the valley.")
+    result = runner.invoke(app, ["analyze", str(sample)])
+    assert result.exit_code == 0
+    assert "Report saved" in result.output
+    assert (tmp_path / "artifacts" / "stream_fingerprint.pdf").exists()
+
+
+def test_cli_compare_default_artifacts(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    f1 = tmp_path / "docA.txt"
+    f2 = tmp_path / "docB.txt"
+    f1.write_text("Morning sunlight filtered through the pine needles onto the forest floor.")
+    f2.write_text("Dawn beams pierced through evergreen boughs above the mossy ground.")
+    result = runner.invoke(app, ["compare", str(f1), str(f2)])
+    assert result.exit_code == 0
+    assert "Comparison report saved" in result.output
+    assert (tmp_path / "artifacts" / "compare_docA_docB.pdf").exists()
+
+
 def test_cli_store_lifecycle(tmp_path: Path, monkeypatch):
     test_db = tmp_path / "cli_test.db"
     # Point default DB path to test_db for isolation

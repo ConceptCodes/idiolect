@@ -57,7 +57,10 @@ def analyze(
         readable=True,
     ),
     output: Path = typer.Option(
-        Path("."), "--output", "-o", help="Output directory for the PDF report."
+        Path("artifacts"),
+        "--output",
+        "-o",
+        help="Output directory for the PDF report (default: 'artifacts').",
     ),
     label: Optional[str] = typer.Option(
         None, "--label", "-l", help="Label for the fingerprint (default: filename stem)."
@@ -165,7 +168,10 @@ def compare(
         readable=True,
     ),
     output: Path = typer.Option(
-        Path("."), "--output", "-o", help="Output directory for the PDF report."
+        Path("artifacts"),
+        "--output",
+        "-o",
+        help="Output directory for the PDF report (default: 'artifacts').",
     ),
     no_report: bool = typer.Option(
         False, "--no-report", help="Skip PDF report generation, only print summary."
