@@ -9,8 +9,9 @@ from rich.table import Table
 
 from .comparison import compare as compare_fingerprints
 from .fingerprint import create_fingerprint
-from .ingestion import find_text_files, ingest_file, ingest_path
+from .ingestion import find_text_files, ingest_file
 from .models import AuthorType
+from .profiling import calculate_sample_weights, classify_stability, compute_profile_consistency
 from .report import generate_comparison_report, generate_report
 from .store import FingerprintStore
 
@@ -330,8 +331,19 @@ def enroll(
         dir_okay=True,
         readable=True,
     ),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        "-r",
+        help="Clear prior samples and start a fresh baseline profile.",
+    ),
+    decay: float = typer.Option(
+        0.90,
+        "--decay",
+        help="Exponential decay factor for weighted rolling average (0.1 to 1.0).",
+    ),
 ):
-    """Enroll a text sample or directory of samples as a known author's fingerprint."""
+    """Enroll sample(s) into an author's multi-sample profile via weighted rolling average."""
     store = get_store()
 
     if path.is_dir():
@@ -340,23 +352,67 @@ def enroll(
             console.print(f"[bold red]Error:[/] No supported text files found in directory: {path}")
             raise typer.Exit(1)
 
+        samples = []
+        with Progress(
+            SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
+        ) as progress:
+            task = progress.add_task(
+                f"Ingesting {len(files)} samples for [cyan]{name}[/cyan]...", total=len(files)
+            )
+            for f in files:
+                progress.update(task, description=f"Analyzing [cyan]{f.name}[/cyan]...")
+                doc = ingest_file(f)
+                fp = create_fingerprint(doc, label=f.stem)
+                samples.append((f.name, fp))
+                progress.advance(task)
+
+            composite_fp = store.enroll_samples(
+                author_label=name,
+                samples=samples,
+                replace=replace,
+                recency_decay=decay,
+            )
+
+        added_words = sum(fp.word_count for _, fp in samples)
+        console.print(
+            f"[bold green]✓ Successfully enrolled author profile:[/bold green] "
+            f"[bold cyan]{name}[/bold cyan]\n"
+            f"  📂 Ingested {len(files)} samples ({added_words:,} words added)\n"
+            f"  📈 Rolling Baseline: [bold]{composite_fp.sample_count} samples[/bold]  |  "
+            f"[bold]{composite_fp.word_count:,} total words[/bold] (decay={decay:.2f})"
+        )
+        return
+
+    # Single-file mode
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
     ) as progress:
-        progress.add_task(description=f"Enrolling [cyan]{name}[/cyan]...", total=None)
-        doc = ingest_path(path)
-        fingerprint = create_fingerprint(doc, label=name)
-        store.enroll(fingerprint)
+        progress.add_task(
+            description=f"Enrolling sample from [cyan]{path.name}[/cyan]...", total=None
+        )
+        doc = ingest_file(path)
+        fp = create_fingerprint(doc, label=path.stem)
+        composite_fp = store.enroll_sample(
+            author_label=name,
+            fingerprint=fp,
+            sample_label=path.name,
+            replace=replace,
+            recency_decay=decay,
+        )
 
-    if path.is_dir():
+    if composite_fp.sample_count > 1 and not replace:
         console.print(
-            f"[bold green]✓ Successfully enrolled author:[/bold green] {name} "
-            f"([dim]{len(files)} documents combined, {fingerprint.word_count:,} words[/dim])"
+            f"[bold green]✓ Added sample to author profile:[/bold green] "
+            f"[bold cyan]{name}[/bold cyan]\n"
+            f"  📄 New Sample: [cyan]{path.name}[/cyan] ({fp.word_count:,} words)\n"
+            f"  📈 Updated Rolling Baseline: [bold]{composite_fp.sample_count} samples[/bold]  |  "
+            f"[bold]{composite_fp.word_count:,} total words[/bold] (decay={decay:.2f})"
         )
     else:
         console.print(
-            f"[bold green]✓ Successfully enrolled author:[/bold green] {name} "
-            f"([dim]{fingerprint.word_count:,} words[/dim])"
+            f"[bold green]✓ Successfully enrolled author:[/bold green] "
+            f"[bold cyan]{name}[/bold cyan]\n"
+            f"  📄 Sample #1: [cyan]{path.name}[/cyan] ({fp.word_count:,} words)"
         )
 
 
@@ -432,9 +488,14 @@ def verify(
             table.add_row(f.name, f"{fp.word_count:,}", sim_str, delta_str, verdict_styled)
 
         console.print(table)
+        sample_info = (
+            f" ({enrolled.sample_count} samples rolling baseline)"
+            if enrolled.sample_count > 1
+            else ""
+        )
         console.print(
             Panel(
-                f"👤 Enrolled Author: [bold]{name}[/bold]\n"
+                f"👤 Enrolled Author: [bold]{name}[/bold]{sample_info}\n"
                 f"📂 Directory: [bold]{path}[/bold] ({len(files)} documents)\n"
                 f"🎯 Strong Matches: [bold green]{matched_count}/{len(files)}[/bold green]",
                 title="BATCH VERIFICATION COMPLETE",
@@ -455,10 +516,13 @@ def verify(
 
     sim = comp.cosine_similarity * 100
     color = "green" if sim > 80 else "yellow" if sim > 60 else "red"
+    sample_info = (
+        f" ({enrolled.sample_count} samples rolling baseline)" if enrolled.sample_count > 1 else ""
+    )
 
     console.print(
         Panel(
-            f"Author: [bold]{name}[/]\n"
+            f"Author: [bold]{name}[/]{sample_info}\n"
             f"File: [bold]{path.name}[/]\n\n"
             f"Match Confidence: [{color} bold]{sim:.1f}%[/]\n"
             f"Result: [bold]{comp.same_author_likelihood.replace('_', ' ').title()}[/]",
@@ -568,12 +632,17 @@ def identify(
             delta_str = f"{best_comp.manhattan_delta:.3f}"
             verdict = best_comp.same_author_likelihood.replace("_", " ").title()
 
+            cand_lbl = (
+                f"{best_cand_fp.label} ({best_cand_fp.sample_count}s)"
+                if best_cand_fp.sample_count > 1
+                else best_cand_fp.label
+            )
             if sim >= 80:
-                top_match_str = f"[bold green]{best_cand_fp.label}[/bold green]"
+                top_match_str = f"[bold green]{cand_lbl}[/bold green]"
             elif sim >= 60:
-                top_match_str = f"[bold yellow]{best_cand_fp.label}[/bold yellow]"
+                top_match_str = f"[bold yellow]{cand_lbl}[/bold yellow]"
             else:
-                top_match_str = f"[bold red]{best_cand_fp.label}[/bold red]"
+                top_match_str = f"[bold red]{cand_lbl}[/bold red]"
 
             margin_str = f"+{margin:.1f}%" if margin is not None else "—"
             author_counts[best_cand_fp.label] = author_counts.get(best_cand_fp.label, 0) + 1
@@ -649,10 +718,15 @@ def identify(
             f"([cyan]{runner_up_fp.label}[/cyan] at {runner_up_pct:.1f}%)"
         )
 
+    sample_badge = (
+        f" ({best_candidate_fp.sample_count} samples rolling baseline)"
+        if best_candidate_fp.sample_count > 1
+        else ""
+    )
     header_text = (
         f"📄 Essay: [bold]{path.name}[/bold] ({essay_fp.word_count:,} words)\n"
         f"👥 Enrolled Candidates Evaluated: {len(enrolled_candidates)}\n\n"
-        f"🏆 Top Match: [{color} bold]{best_candidate_fp.label}[/]\n"
+        f"🏆 Top Match: [{color} bold]{best_candidate_fp.label}[/]{sample_badge}\n"
         f"Match Confidence: [{color} bold]{best_sim_pct:.1f}%[/] "
         f"({best_comp.same_author_likelihood.replace('_', ' ').title()})"
         f"{margin_text}"
@@ -678,8 +752,13 @@ def identify(
         delta_str = f"{comp.manhattan_delta:.3f}"
         verdict = comp.same_author_likelihood.replace("_", " ").title()
 
+        cand_str = (
+            f"{cand_fp.label} [dim]({cand_fp.sample_count}s)[/dim]"
+            if cand_fp.sample_count > 1
+            else cand_fp.label
+        )
         rank_badge = f"[bold yellow]#{rank}[/]" if rank == 1 else f"#{rank}"
-        table.add_row(rank_badge, cand_fp.label, sim_col, delta_str, verdict)
+        table.add_row(rank_badge, cand_str, sim_col, delta_str, verdict)
 
     console.print(table)
 
@@ -693,20 +772,194 @@ def identify(
 
 @app.command(name="list")
 def list_fingerprints():
-    """List all enrolled fingerprints."""
+    """List all enrolled author profiles, sample counts, and baseline consistency."""
     store = get_store()
-    labels = store.list_all()
-    if not labels:
+    profiles = store.list_profiles()
+    if not profiles:
         console.print("No authors enrolled.")
         return
 
-    table = Table(title="Enrolled Authors", show_header=True)
-    table.add_column("Name", style="cyan")
+    table = Table(
+        title=f"Enrolled Author Profiles ({len(profiles)} Registered)",
+        show_header=True,
+        header_style="bold magenta",
+    )
+    table.add_column("Author", style="cyan")
+    table.add_column("Samples", justify="right")
+    table.add_column("Words", justify="right")
+    table.add_column("Type", justify="center")
+    table.add_column("Consistency", justify="right")
+    table.add_column("Top Trait", justify="left")
 
-    for label in labels:
-        table.add_row(label)
+    for prof in profiles:
+        fp = prof.composite_fingerprint
+        sample_str = str(prof.sample_count)
+        words_str = f"{prof.total_word_count:,}"
+
+        if fp.author_type == AuthorType.HUMAN:
+            type_str = "[bold green]HUMAN[/bold green]"
+        elif fp.author_type == AuthorType.AI:
+            type_str = "[bold red]AI[/bold red]"
+        else:
+            type_str = "[bold yellow]UNCERTAIN[/bold yellow]"
+
+        if prof.sample_count > 1 and fp.axis_stability:
+            consistency = compute_profile_consistency(fp.axis_stability)
+            c_color = "green" if consistency >= 85 else ("yellow" if consistency >= 70 else "red")
+            cons_str = f"[{c_color}]{consistency:.1f}%[/]"
+        else:
+            cons_str = "—"
+
+        if fp.standout_traits:
+            top_trait = fp.standout_traits[0]
+            t_name = top_trait.get("feature", "").replace(".", " › ").replace("_", " ").title()
+            z = top_trait.get("z_score", 0.0)
+            arrow = "↑" if z > 0 else "↓"
+            trait_str = f"{t_name[:20]} {arrow}"
+        else:
+            trait_str = "[dim]Average[/dim]"
+
+        table.add_row(prof.label, sample_str, words_str, type_str, cons_str, trait_str)
 
     console.print(table)
+
+
+@app.command()
+def profile(
+    name: str = typer.Argument(..., help="Name of the enrolled author to inspect."),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Optional output directory to generate a PDF profile report.",
+    ),
+):
+    """Inspect an author's multi-sample profile, consistency, and rolling baseline."""
+    store = get_store()
+    prof = store.get_profile(name)
+    if not prof:
+        console.print(f"[bold red]Error:[/] Author '{name}' is not enrolled.")
+        raise typer.Exit(1)
+
+    fp = prof.composite_fingerprint
+    samples = prof.samples
+
+    # Header Panel
+    consistency_text = ""
+    if prof.sample_count > 1 and fp.axis_stability:
+        consistency = compute_profile_consistency(fp.axis_stability)
+        c_color = "green" if consistency >= 85 else ("yellow" if consistency >= 70 else "red")
+        consistency_text = f"  |  Consistency: [{c_color} bold]{consistency:.1f}%[/]"
+
+    type_color = (
+        "green"
+        if fp.author_type == AuthorType.HUMAN
+        else ("red" if fp.author_type == AuthorType.AI else "yellow")
+    )
+
+    header = (
+        f"👤 Author: [bold]{prof.label}[/bold]\n"
+        f"📚 Enrolled Samples: [bold]{prof.sample_count}[/bold]  |  "
+        f"Total Words: [bold]{prof.total_word_count:,}[/bold]{consistency_text}\n\n"
+        f"🤖 Classification: [{type_color} bold]{fp.author_type.value.upper()}[/] "
+        f"(confidence: {fp.ai_confidence * 100:.1f}%)"
+    )
+    console.print(Panel(header, title="IDIOLECT AUTHOR PROFILE", expand=False, padding=(1, 2)))
+
+    # Samples Table
+    if samples:
+        weights = calculate_sample_weights([s.word_count for s in samples])
+        table_s = Table(
+            title="Enrolled Writing Samples (Weighted Rolling Window)",
+            show_header=True,
+            header_style="bold magenta",
+        )
+        table_s.add_column("#", justify="right", style="dim", width=4)
+        table_s.add_column("Sample Label", style="cyan", width=28)
+        table_s.add_column("Words", justify="right", width=9)
+        table_s.add_column("Enrolled Date", justify="center", width=20)
+        table_s.add_column("Rolling Weight", justify="right", width=16)
+
+        for i, (sample, w) in enumerate(zip(samples, weights), start=1):
+            date_str = (
+                sample.enrolled_at[:10] if len(sample.enrolled_at) >= 10 else sample.enrolled_at
+            )
+            w_pct = f"{w * 100:.1f}%"
+            bar = draw_bar(w * 100, width=8)
+            table_s.add_row(
+                str(i), sample.sample_label, f"{sample.word_count:,}", date_str, f"{w_pct} {bar}"
+            )
+
+        console.print(table_s)
+
+    # Stylometric Axes with Stability
+    console.print(
+        "\n  [bold cyan]📊 Stylometric Radar Axes (Rolling Composite Baseline):[/bold cyan]"
+    )
+    axes_display = [
+        (
+            "Lexical Richness",
+            fp.axes.get("lexical_richness", 0.0),
+            fp.axis_stability.get("lexical_richness", 0.0),
+        ),
+        (
+            "Syntactic Complex.",
+            fp.axes.get("syntactic_complexity", 0.0),
+            fp.axis_stability.get("syntactic_complexity", 0.0),
+        ),
+        (
+            "Formality",
+            fp.axes.get("formality", 0.0),
+            fp.axis_stability.get("formality", 0.0),
+        ),
+        (
+            "Epistemic Stance",
+            fp.axes.get("epistemic_stance", 0.0),
+            fp.axis_stability.get("epistemic_stance", 0.0),
+        ),
+        (
+            "Pacing & Cadence",
+            fp.axes.get("pacing_cadence", 0.0),
+            fp.axis_stability.get("pacing_cadence", 0.0),
+        ),
+        (
+            "Affective Intensity",
+            fp.axes.get("affective_intensity", 0.0),
+            fp.axis_stability.get("affective_intensity", 0.0),
+        ),
+        (
+            "Engagement",
+            fp.axes.get("interactive_engagement", 0.0),
+            fp.axis_stability.get("interactive_engagement", 0.0),
+        ),
+    ]
+
+    for name, score, std in axes_display:
+        bar = draw_bar(score, width=20)
+        if prof.sample_count > 1:
+            stability_str = f"±{std:4.1f} ({classify_stability(std)})"
+            console.print(f"  {name:<19} {bar}  {int(score):3d}  [dim]{stability_str}[/dim]")
+        else:
+            console.print(f"  {name:<19} {bar}  {int(score):3d}")
+
+    # Standout Traits
+    if fp.standout_traits:
+        console.print("\n  [bold yellow]⚡ Standout Traits:[/bold yellow]")
+        for trait in fp.standout_traits[:5]:
+            t_name = trait.get("feature", "").replace(".", " › ").replace("_", " ").title()
+            z = trait.get("z_score", 0.0)
+            interp = trait.get("interpretation", "")
+            arrow = "↑" if z > 0 else "↓"
+            console.print(f"  • {t_name} — z = {z:+.1f} {arrow} — {interp}")
+
+    console.print()
+
+    if output:
+        output.mkdir(parents=True, exist_ok=True)
+        safe_name = prof.label.replace(" ", "_")
+        pdf_path = output / f"profile_{safe_name}.pdf"
+        generate_report(fp, pdf_path)
+        console.print(f"  📋 Profile report saved: [cyan]{pdf_path}[/cyan]\n")
 
 
 @app.command()

@@ -244,8 +244,8 @@ def test_cli_enroll_and_verify_batch(tmp_path: Path, monkeypatch):
 
     res_enroll = runner.invoke(app, ["enroll", "Clara", str(author_samples)])
     assert res_enroll.exit_code == 0
-    assert "Successfully enrolled author: Clara" in res_enroll.output
-    assert "2 documents combined" in res_enroll.output
+    assert "Successfully enrolled author profile: Clara" in res_enroll.output
+    assert "2 samples" in res_enroll.output
 
     # 2. Verify folder of documents against Clara
     test_folder = tmp_path / "verify_folder"
@@ -316,3 +316,61 @@ def test_cli_identify_batch_directory(tmp_path: Path, monkeypatch):
     res_no_rep = runner.invoke(app, ["identify", str(subs_dir), "--no-report"])
     assert res_no_rep.exit_code == 0
     assert "Batch Author Identification" in res_no_rep.output
+
+
+def test_cli_multi_sample_enroll_and_profile(tmp_path: Path, monkeypatch):
+    test_db = tmp_path / "multi_sample_cli.db"
+    import idiolect.store
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    s1 = tmp_path / "essay1.txt"
+    s2 = tmp_path / "essay2.txt"
+    s1.write_text(
+        "The crisp morning frost covered the quiet garden stones as autumn set in gently."
+    )
+    s2.write_text(
+        "Winter approached swiftly, bringing dark twilight and freezing evening gusts outside."
+    )
+
+    # 1. First sample
+    res1 = runner.invoke(app, ["enroll", "Arthur", str(s1)])
+    assert res1.exit_code == 0
+    assert "Sample #1: essay1.txt" in res1.output
+
+    # 2. Second sample (rolling update)
+    res2 = runner.invoke(app, ["enroll", "Arthur", str(s2)])
+    assert res2.exit_code == 0
+    assert "Added sample to author profile: Arthur" in res2.output
+    assert "Updated Rolling Baseline: 2 samples" in res2.output
+
+    # 3. List profiles
+    res_list = runner.invoke(app, ["list"])
+    assert res_list.exit_code == 0
+    assert "Arthur" in res_list.output
+    assert "Enrolled Author Profiles" in res_list.output
+
+    # 4. Profile inspection
+    res_prof = runner.invoke(app, ["profile", "Arthur"])
+    assert res_prof.exit_code == 0
+    assert "IDIOLECT AUTHOR PROFILE" in res_prof.output
+    assert "Arthur" in res_prof.output
+    assert "Enrolled Writing Samples" in res_prof.output
+    assert "essay1.txt" in res_prof.output
+    assert "essay2.txt" in res_prof.output
+    assert "Rolling Composite Baseline" in res_prof.output
+
+    # 5. Profile inspection with PDF output
+    out_dir = tmp_path / "prof_artifacts"
+    res_pdf = runner.invoke(app, ["profile", "Arthur", "--output", str(out_dir)])
+    assert res_pdf.exit_code == 0
+    assert (out_dir / "profile_Arthur.pdf").exists()
+
+    # 6. Profile non-existent author
+    res_missing = runner.invoke(app, ["profile", "NonExistent"])
+    assert res_missing.exit_code != 0
+    assert "not enrolled" in res_missing.output

@@ -7,7 +7,7 @@ fingerprint synthesis, comparison, and reporting modules.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -174,6 +174,13 @@ class Fingerprint:
     ai_confidence: float = 0.0
     """Confidence in the author_type prediction (0-1)."""
 
+    # Multi-sample profiling metadata
+    sample_count: int = 1
+    """Number of individual writing samples aggregated into this fingerprint."""
+
+    axis_stability: dict[str, float] = field(default_factory=dict)
+    """Standard deviation of 7-axis radar scores across samples (lower = more consistent)."""
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to a JSON-serializable dictionary."""
         d = asdict(self)
@@ -187,8 +194,13 @@ class Fingerprint:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Fingerprint:
         """Deserialize from a dictionary."""
+        data = data.copy()
         data["author_type"] = AuthorType(data.get("author_type", "uncertain"))
-        return cls(**data)
+        data.setdefault("sample_count", 1)
+        data.setdefault("axis_stability", {})
+        valid_fields = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered)
 
     @classmethod
     def from_json(cls, json_str: str) -> Fingerprint:
@@ -203,6 +215,37 @@ class Fingerprint:
     def load(cls, path: Path) -> Fingerprint:
         """Load fingerprint from a JSON file."""
         return cls.from_json(path.read_text())
+
+
+@dataclass
+class AuthorSample:
+    """A single writing sample enrolled for an author profile."""
+
+    id: int | None
+    author_label: str
+    sample_label: str
+    word_count: int
+    enrolled_at: str
+    fingerprint: Fingerprint
+
+
+@dataclass
+class AuthorProfile:
+    """Aggregated stylometric profile for an author composed of multiple samples."""
+
+    label: str
+    composite_fingerprint: Fingerprint
+    samples: list[AuthorSample] = field(default_factory=list)
+
+    @property
+    def sample_count(self) -> int:
+        return len(self.samples) if self.samples else self.composite_fingerprint.sample_count
+
+    @property
+    def total_word_count(self) -> int:
+        if self.samples:
+            return sum(s.word_count for s in self.samples)
+        return self.composite_fingerprint.word_count
 
 
 @dataclass

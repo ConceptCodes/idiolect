@@ -415,7 +415,12 @@ def generate_report(fingerprint: Fingerprint, output_path: Path | None = None) -
         pdf.set_xy(120, y_hero + 4)
         pdf.set_font("helvetica", "B", 8)
         pdf.set_text_color(*COLOR_TEXT_DARK)
-        pdf.cell(70, 5, f"Label: {fingerprint.label[:22]}", align="R")
+        lbl_text = (
+            f"Profile: {fingerprint.label[:16]} ({fingerprint.sample_count} samples)"
+            if fingerprint.sample_count > 1
+            else f"Label: {fingerprint.label[:22]}"
+        )
+        pdf.cell(70, 5, lbl_text, align="R")
 
         pdf.set_xy(120, y_hero + 10)
         pdf.set_font("helvetica", "", 7.5)
@@ -888,7 +893,12 @@ def generate_comparison_report(
         pdf.set_xy(21, y_docs + 3)
         pdf.set_font("helvetica", "B", 9.5)
         pdf.set_text_color(*COLOR_NAVY)
-        pdf.cell(doc_w - 10, 5, f"Doc A: {fp_a.label[:22]}")
+        doc_a_label = (
+            f"Doc A: {fp_a.label[:16]} ({fp_a.sample_count}s)"
+            if fp_a.sample_count > 1
+            else f"Doc A: {fp_a.label[:22]}"
+        )
+        pdf.cell(doc_w - 10, 5, doc_a_label)
 
         pdf.set_xy(21, y_docs + 9)
         pdf.set_font("helvetica", "", 7.5)
@@ -915,7 +925,12 @@ def generate_comparison_report(
         pdf.set_xy(bx + 6, y_docs + 3)
         pdf.set_font("helvetica", "B", 9.5)
         pdf.set_text_color(*COLOR_NAVY)
-        pdf.cell(doc_w - 10, 5, f"Doc B: {fp_b.label[:22]}")
+        doc_b_label = (
+            f"Doc B: {fp_b.label[:16]} ({fp_b.sample_count}s)"
+            if fp_b.sample_count > 1
+            else f"Doc B: {fp_b.label[:22]}"
+        )
+        pdf.cell(doc_w - 10, 5, doc_b_label)
 
         pdf.set_xy(bx + 6, y_docs + 9)
         pdf.set_font("helvetica", "", 7.5)
