@@ -13,7 +13,6 @@ from pathlib import Path
 
 from .models import Document
 
-
 # Lazy-loaded spaCy model
 _nlp = None
 
@@ -87,9 +86,7 @@ def load_text(path: Path) -> str:
     if suffix in (".txt", ".md", ".text"):
         return path.read_text(encoding="utf-8")
     elif suffix == ".pdf":
-        raise NotImplementedError(
-            "PDF input is not yet supported. Convert to plain text first."
-        )
+        raise NotImplementedError("PDF input is not yet supported. Convert to plain text first.")
     else:
         # Try reading as plain text
         return path.read_text(encoding="utf-8")
@@ -113,18 +110,10 @@ def ingest(text: str, source_path: str | None = None) -> Document:
     sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
     # Extract word tokens (no punctuation, no whitespace)
-    tokens = [
-        token.text
-        for token in doc
-        if not token.is_punct and not token.is_space
-    ]
+    tokens = [token.text for token in doc if not token.is_punct and not token.is_space]
 
     # All tokens including punctuation (but not whitespace)
-    all_tokens = [
-        token.text
-        for token in doc
-        if not token.is_space
-    ]
+    all_tokens = [token.text for token in doc if not token.is_space]
 
     document = Document(
         raw_text=text,

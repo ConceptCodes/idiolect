@@ -1,37 +1,19 @@
-"""Compares two linguistic Fingerprints."""
-
-from __future__ import annotations
-
-import math
 import numpy as np
 
-try:
-    from scipy.spatial.distance import cosine
-except ImportError:
-    # Fallback if scipy is not installed
-    def cosine(u, v):
-        uv = np.dot(u, v)
-        uu = np.dot(u, u)
-        vv = np.dot(v, v)
-        if uu == 0 or vv == 0:
-            return 1.0
-        return 1.0 - uv / math.sqrt(uu * vv)
-
-from .models import ComparisonResult, Fingerprint
-# Import POPULATION_STATS to use for Burrows' Delta z-scoring
 from .fingerprint import POPULATION_STATS
+from .models import ComparisonResult, Fingerprint
 
 
 def compare(fp_a: Fingerprint, fp_b: Fingerprint) -> ComparisonResult:
     """Compare two fingerprints and generate a ComparisonResult.
-    
+
     Calculates cosine similarity, Burrows' Delta, per-axis differences,
     and identifies the most similar and most divergent features.
     """
     # 1. Extract feature vectors
     features_a = fp_a.features
     features_b = fp_b.features
-    
+
     # 2. Extract calibrated features in POPULATION_STATS for standardized comparison
     z_a_list = []
     z_b_list = []
@@ -50,26 +32,30 @@ def compare(fp_a: Fingerprint, fp_b: Fingerprint) -> ComparisonResult:
             valid_features += 1
             feature_diffs.append((k, diff))
 
-    # Also compare any remaining common features
+    # Also compare any remaining common features with relative normalization
+    # so unscaled raw counts cannot distort the similarity ranking
     for k in features_a:
         if k in features_b and k not in POPULATION_STATS:
-            diff = abs(features_a[k] - features_b[k])
-            feature_diffs.append((k, diff))
+            val_a = features_a[k]
+            val_b = features_b[k]
+            scale = abs(val_a) + abs(val_b) + 1.0
+            norm_diff = abs(val_a - val_b) / scale
+            feature_diffs.append((k, norm_diff))
 
     # 3. Standardized vectors
     if valid_features > 0:
         za_vec = np.array(z_a_list, dtype=float)
         zb_vec = np.array(z_b_list, dtype=float)
-        
+
         norm_a = np.linalg.norm(za_vec)
         norm_b = np.linalg.norm(zb_vec)
-        
+
         if norm_a > 0 and norm_b > 0:
             # Cosine similarity in z-score space
             z_cos_sim = float(np.dot(za_vec, zb_vec) / (norm_a * norm_b))
         else:
             z_cos_sim = 0.0
-            
+
         manhattan_delta = manhattan_sum / valid_features
     else:
         z_cos_sim = 0.0
@@ -80,10 +66,10 @@ def compare(fp_a: Fingerprint, fp_b: Fingerprint) -> ComparisonResult:
     axes_a = fp_a.axes
     axes_b = fp_b.axes
     common_axes = set(axes_a.keys()).intersection(axes_b.keys())
-    
+
     for ax in common_axes:
         axis_deltas[ax] = abs(axes_a[ax] - axes_b[ax])
-        
+
     mean_axis_delta = float(np.mean(list(axis_deltas.values()))) if axis_deltas else 20.0
 
     # Overall similarity score (0.0 to 1.0)
@@ -91,7 +77,7 @@ def compare(fp_a: Fingerprint, fp_b: Fingerprint) -> ComparisonResult:
     # Manhattan delta of 0 -> 1.0; delta of 2.2+ -> 0.0
     delta_score = max(0.0, min(1.0, 1.0 - (manhattan_delta / 2.2)))
     axis_score = max(0.0, min(1.0, 1.0 - (mean_axis_delta / 35.0)))
-    
+
     cosine_similarity = 0.60 * delta_score + 0.40 * axis_score
     cosine_delta = 1.0 - max(0.0, z_cos_sim)
 
@@ -122,5 +108,5 @@ def compare(fp_a: Fingerprint, fp_b: Fingerprint) -> ComparisonResult:
         axis_deltas=axis_deltas,
         same_author_likelihood=same_author,
         most_similar_features=most_similar_features,
-        most_divergent_features=most_divergent_features
+        most_divergent_features=most_divergent_features,
     )

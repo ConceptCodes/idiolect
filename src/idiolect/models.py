@@ -121,7 +121,9 @@ FINGERPRINT_AXES = [
 
 AXIS_DESCRIPTIONS = {
     "lexical_richness": "Vocabulary diversity, rare word usage, and word sophistication",
-    "syntactic_complexity": "Sentence structure variation, clause depth, and grammatical complexity",
+    "syntactic_complexity": (
+        "Sentence structure variation, clause depth, and grammatical complexity"
+    ),
     "formality": "Register formality, nominalization, and context-independence",
     "epistemic_stance": "Certainty vs. hedging, modal verb patterns, and evidentiality",
     "pacing_cadence": "Sentence length rhythm, punctuation density, and structural variety",

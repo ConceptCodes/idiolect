@@ -7,6 +7,7 @@ import textstat
 
 from ..models import Document
 
+
 def extract_readability(doc: Document) -> dict[str, float]:
     """Extract readability metrics from a Document."""
     features = {
@@ -26,7 +27,7 @@ def extract_readability(doc: Document) -> dict[str, float]:
         return features
 
     text = doc.cleaned_text
-    
+
     try:
         features["flesch_reading_ease"] = float(textstat.flesch_reading_ease(text))
         features["flesch_kincaid_grade"] = float(textstat.flesch_kincaid_grade(text))
@@ -35,7 +36,7 @@ def extract_readability(doc: Document) -> dict[str, float]:
         features["coleman_liau_index"] = float(textstat.coleman_liau_index(text))
         features["automated_readability_index"] = float(textstat.automated_readability_index(text))
         features["dale_chall_score"] = float(textstat.dale_chall_readability_score(text))
-        
+
         avg_syllables = textstat.avg_syllables_per_word(text)
         features["avg_syllables_per_word"] = float(avg_syllables)
 

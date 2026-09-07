@@ -1,4 +1,3 @@
-import json
 import sqlite3
 from pathlib import Path
 
@@ -37,7 +36,8 @@ class FingerprintStore:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO fingerprints (label, fingerprint_json, created_at, word_count)
+                INSERT OR REPLACE INTO fingerprints
+                (label, fingerprint_json, created_at, word_count)
                 VALUES (?, ?, ?, ?)
                 """,
                 (

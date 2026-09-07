@@ -1,6 +1,7 @@
 from idiolect.fingerprint import create_fingerprint_from_text
 from idiolect.models import AuthorType, Fingerprint
 
+
 def test_fingerprint_creation_and_serialization():
     text = (
         "I was walking through the forest when I stumbled upon an old, forgotten cabin. "

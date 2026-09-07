@@ -1,9 +1,10 @@
-from idiolect.ingestion import ingest
-from idiolect.features.lexical import extract_lexical
-from idiolect.features.syntactic import extract_syntactic
-from idiolect.features.readability import extract_readability
-from idiolect.features.pragmatic import extract_pragmatic
 from idiolect.features.character import extract_character
+from idiolect.features.lexical import extract_lexical
+from idiolect.features.pragmatic import extract_pragmatic
+from idiolect.features.readability import extract_readability
+from idiolect.features.syntactic import extract_syntactic
+from idiolect.ingestion import ingest
+
 
 def test_feature_extractors():
     sample = (

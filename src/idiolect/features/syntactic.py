@@ -8,6 +8,7 @@ import numpy as np
 
 from ..models import Document
 
+
 def extract_syntactic(doc: Document) -> dict[str, float]:
     """Extract syntactic features from a Document."""
     features = {
@@ -24,8 +25,23 @@ def extract_syntactic(doc: Document) -> dict[str, float]:
     }
 
     # Universal POS tags
-    pos_tags = ["NOUN", "VERB", "ADJ", "ADV", "PRON", "DET", "ADP", "AUX", 
-                "CCONJ", "SCONJ", "PUNCT", "NUM", "PROPN", "PART", "INTJ"]
+    pos_tags = [
+        "NOUN",
+        "VERB",
+        "ADJ",
+        "ADV",
+        "PRON",
+        "DET",
+        "ADP",
+        "AUX",
+        "CCONJ",
+        "SCONJ",
+        "PUNCT",
+        "NUM",
+        "PROPN",
+        "PART",
+        "INTJ",
+    ]
     for tag in pos_tags:
         features[f"pos_{tag}"] = 0.0
 
@@ -63,7 +79,7 @@ def extract_syntactic(doc: Document) -> dict[str, float]:
         if not sent.text.strip():
             continue
         tree_depths.append(get_tree_depth(sent.root))
-        
+
         for token in sent:
             # POS
             if token.pos_ in pos_counts:
@@ -83,7 +99,7 @@ def extract_syntactic(doc: Document) -> dict[str, float]:
     if tree_depths:
         features["parse_tree_depth_mean"] = float(np.mean(tree_depths))
         features["parse_tree_depth_max"] = float(np.max(tree_depths))
-    
+
     if arc_lengths:
         features["dep_arc_length_mean"] = float(np.mean(arc_lengths))
 
