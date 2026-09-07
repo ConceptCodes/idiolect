@@ -192,3 +192,127 @@ def test_cli_identify_success(tmp_path: Path, monkeypatch):
     res_no_rep = runner.invoke(app, ["identify", str(unknown_essay), "--no-report"])
     assert res_no_rep.exit_code == 0
     assert "Top Match: Alice" in res_no_rep.output
+
+
+def test_cli_analyze_batch_directory(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "doc1.txt").write_text(
+        "The rapid development of modern artificial intelligence tools and models."
+    )
+    (corpus / "doc2.txt").write_text(
+        "I walked slowly through the dense pines listening to the chirping birds."
+    )
+
+    # With reports
+    out_dir = tmp_path / "custom_artifacts"
+    res = runner.invoke(app, ["analyze", str(corpus), "--output", str(out_dir)])
+    assert res.exit_code == 0
+    assert "Batch Linguistic Analysis" in res.output
+    assert "BATCH ANALYSIS COMPLETE" in res.output
+    assert (out_dir / "doc1_fingerprint.pdf").exists()
+    assert (out_dir / "doc2_fingerprint.pdf").exists()
+
+    # Empty directory error
+    empty_dir = tmp_path / "empty_dir"
+    empty_dir.mkdir()
+    res_empty = runner.invoke(app, ["analyze", str(empty_dir)])
+    assert res_empty.exit_code != 0
+    assert "No supported text files found" in res_empty.output
+
+
+def test_cli_enroll_and_verify_batch(tmp_path: Path, monkeypatch):
+    test_db = tmp_path / "batch_test.db"
+    import idiolect.store
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    # 1. Enroll from folder of writing samples
+    author_samples = tmp_path / "clara_samples"
+    author_samples.mkdir()
+    (author_samples / "sample1.txt").write_text(
+        "Her meticulous attention to detail was evident across every stanza of poetry."
+    )
+    (author_samples / "sample2.txt").write_text(
+        "The lyrical phrasing carried an unmistakable cadence that enchanted all listeners."
+    )
+
+    res_enroll = runner.invoke(app, ["enroll", "Clara", str(author_samples)])
+    assert res_enroll.exit_code == 0
+    assert "Successfully enrolled author: Clara" in res_enroll.output
+    assert "2 documents combined" in res_enroll.output
+
+    # 2. Verify folder of documents against Clara
+    test_folder = tmp_path / "verify_folder"
+    test_folder.mkdir()
+    (test_folder / "test1.txt").write_text(
+        "Her lyrical phrasing and poetic stanzas left a lasting impression on everyone."
+    )
+    (test_folder / "test2.txt").write_text(
+        "The compiler optimizes register allocation using graph coloring heuristics."
+    )
+
+    res_verify = runner.invoke(app, ["verify", "Clara", str(test_folder)])
+    assert res_verify.exit_code == 0
+    assert "Batch Author Verification Against 'Clara'" in res_verify.output
+    assert "BATCH VERIFICATION COMPLETE" in res_verify.output
+
+
+def test_cli_identify_batch_directory(tmp_path: Path, monkeypatch):
+    test_db = tmp_path / "students_batch.db"
+    import idiolect.store
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    # Enroll Candidate A (Emily) and Candidate B (David)
+    cand_dir = tmp_path / "candidates"
+    cand_dir.mkdir()
+    f_emily = cand_dir / "emily.txt"
+    f_david = cand_dir / "david.txt"
+    f_emily.write_text(
+        "In the quiet laboratory, Eleanor observed the glowing crystals beneath the lens. "
+        "Her notes detailed the delicate luminescence shimmering across the glass."
+    )
+    f_david.write_text(
+        "Distributed database replication protocols must ensure serializable isolation levels. "
+        "Network partitioning triggers consensus quorums under Paxos invariants."
+    )
+
+    runner.invoke(app, ["enroll", "Emily", str(f_emily)])
+    runner.invoke(app, ["enroll", "David", str(f_david)])
+
+    # Submissions folder with 2 essays
+    subs_dir = tmp_path / "submissions"
+    subs_dir.mkdir()
+    (subs_dir / "sub1.txt").write_text(
+        "Eleanor continued examining the illuminated glass prisms in the silent laboratory, "
+        "recording each refractive measurement carefully in her leather notebook."
+    )
+    (subs_dir / "sub2.txt").write_text(
+        "Consensus voting during cluster network splits requires a majority quorum. "
+        "Replicated state machine logs preserve linearizable consistency."
+    )
+
+    # Run batch identify
+    res_batch = runner.invoke(app, ["identify", str(subs_dir)])
+    assert res_batch.exit_code == 0
+    assert "Batch Author Identification" in res_batch.output
+    assert "BATCH IDENTIFICATION COMPLETE" in res_batch.output
+    assert "Emily" in res_batch.output
+    assert "David" in res_batch.output
+    assert (tmp_path / "artifacts" / "identify_sub1_Emily.pdf").exists()
+    assert (tmp_path / "artifacts" / "identify_sub2_David.pdf").exists()
+
+    # Run batch identify with --no-report
+    res_no_rep = runner.invoke(app, ["identify", str(subs_dir), "--no-report"])
+    assert res_no_rep.exit_code == 0
+    assert "Batch Author Identification" in res_no_rep.output

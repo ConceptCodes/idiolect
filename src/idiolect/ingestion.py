@@ -141,3 +141,54 @@ def ingest_file(path: Path) -> Document:
     """
     raw = load_text(path)
     return ingest(raw, source_path=str(path))
+
+
+def find_text_files(path: Path) -> list[Path]:
+    """Find all supported text files from a single file or directory.
+
+    Args:
+        path: Path to a file or directory.
+
+    Returns:
+        Sorted list of Path objects for discovered text files.
+    """
+    path = Path(path)
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        supported_suffixes = {".txt", ".text", ".md", ".markdown", ".rst"}
+        files = [
+            p
+            for p in path.iterdir()
+            if p.is_file()
+            and not p.name.startswith(".")
+            and (p.suffix.lower() in supported_suffixes or not p.suffix)
+        ]
+        return sorted(files, key=lambda p: p.name.lower())
+    return []
+
+
+def ingest_path(path: Path) -> Document:
+    """Load and ingest a file or a directory of files into a Document.
+
+    If a directory is provided, text from all contained text files
+    is combined into a single unified Document.
+
+    Args:
+        path: Path to a file or directory.
+
+    Returns:
+        A fully populated Document ready for feature extraction.
+    """
+    path = Path(path)
+    if path.is_file():
+        return ingest_file(path)
+    elif path.is_dir():
+        files = find_text_files(path)
+        if not files:
+            raise ValueError(f"No readable text files found in directory: {path}")
+        combined_texts = [load_text(f) for f in files]
+        combined_raw = "\n\n".join(combined_texts)
+        return ingest(combined_raw, source_path=str(path))
+    else:
+        raise FileNotFoundError(f"Path does not exist: {path}")
