@@ -108,6 +108,40 @@ idiolect profile "Student Name" --format json
 
 When `--format csv` or `--format json` is selected, standard output is clean and free of ANSI styling, spinners, or table borders—allowing direct stdout redirection (`> output.csv`).
 
+### Document Length Warning & Confidence Damping
+
+Stylometric features (such as Moving-Average Type-Token Ratio, Measure of Textual Lexical Diversity, hapax legomena ratios, and syntactic parse tree depth variance) exhibit high statistical variance when evaluated on brief snippets (<250 words):
+
+- **Automatic Short Document Detection**: Any submission or sample under 250 words triggers a prominent alert notice:
+  ```
+  ⚠️  Short Document Notice (142 words < 250 words)
+      Stylometric metrics (such as MATTR, MTLD, and parse depth variance) have higher
+      sampling noise on brief texts. Attribution confidence has been proportionally damped.
+  ```
+- **Proportional Confidence Damping**: Confidence is scaled via $\sqrt{W / 250}$ (with a 0.40 safety floor) to mitigate false-positive attribution risks on brief texts:
+  ```
+  Match Confidence: 75.4% (damped from 100.0% due to length: 142 words) (Strong Match)
+  ```
+- **Structured Reporting**: Reports document length state across all formats:
+  - **Console**: Displays yellow `⚠️` indicator and explanatory banner.
+  - **JSON**: Includes `"short_document": true`, `"length_warning": "..."`, and `"raw_confidence"`.
+  - **CSV**: Includes `"short_doc": "yes"`.
+
+### Attribution Explainability in `identify`
+
+Attribution decisions shouldn't be opaque black boxes. When identifying an unknown submission, `idiolect` extracts the top 3–5 distinct linguistic traits that drove the match:
+
+- **Trait Salience Scoring**: Evaluates feature alignment in standardized population z-score space, identifying traits where both texts share distinctive divergence from population norms.
+- **Human-Readable Stylistic Insights**: Translates statistical markers into actionable descriptions:
+  ```
+  🔍 Top Aligning Linguistic Traits (Idiolect Drivers):
+    • Semicolon Usage — high semicolon frequency (z-delta: 0.04)
+    • Contraction Rate — low contraction rate (formal register) (z-delta: 0.07)
+    • Subordinate Clauses — complex subordinate clause structure (z-delta: 0.11)
+    • Vocabulary Richness (MATTR) — high moving-average lexical diversity (z-delta: 0.15)
+  ```
+- **Export Integration**: Trait descriptions are automatically included in batch summaries, JSON exports (`aligning_traits` / `top_aligning_traits`), and CSV tables.
+
 ## Persistence & Storage
 
 Enrolled student profiles are permanently stored on disk using **SQLite** at:

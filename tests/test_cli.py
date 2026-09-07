@@ -476,12 +476,22 @@ def test_cli_identify_formats(tmp_path: Path, monkeypatch):
     assert data["essay"] == "essay_emily.txt"
     assert data["top_match"] == "Emily"
     assert len(data["candidates"]) == 2
+    assert data["short_document"] is True
+    assert "aligning_traits" in data
 
     # 2. Single file CSV
     res_csv = runner.invoke(app, ["identify", str(sub1), "--format", "csv", "--no-report"])
     assert res_csv.exit_code == 0
     lines = list(csv.reader(res_csv.output.strip().splitlines()))
-    assert lines[0] == ["rank", "candidate", "samples", "confidence", "burrows_delta", "verdict"]
+    assert lines[0] == [
+        "rank",
+        "candidate",
+        "samples",
+        "confidence",
+        "burrows_delta",
+        "verdict",
+        "top_aligning_traits",
+    ]
     assert lines[1][1] == "Emily"
 
     # 3. Batch Directory CSV (LMS mode)
@@ -491,14 +501,16 @@ def test_cli_identify_formats(tmp_path: Path, monkeypatch):
     assert b_lines[0] == [
         "submission",
         "words",
+        "short_doc",
         "top_match",
         "confidence",
         "burrows_delta",
         "verdict",
         "lead_margin",
+        "top_aligning_traits",
     ]
     assert len(b_lines) == 3
-    submissions_matched = {row[0]: row[2] for row in b_lines[1:]}
+    submissions_matched = {row[0]: row[3] for row in b_lines[1:]}
     assert submissions_matched["essay_emily.txt"] == "Emily"
     assert submissions_matched["essay_david.txt"] == "David"
 
@@ -510,6 +522,8 @@ def test_cli_identify_formats(tmp_path: Path, monkeypatch):
     b_map = {item["submission"]: item["top_match"] for item in b_data}
     assert b_map["essay_emily.txt"] == "Emily"
     assert b_map["essay_david.txt"] == "David"
+    assert b_data[0]["short_document"] is True
+    assert "top_aligning_traits" in b_data[0]
 
 
 def test_cli_verify_and_compare_formats(tmp_path: Path, monkeypatch):
@@ -529,19 +543,30 @@ def test_cli_verify_and_compare_formats(tmp_path: Path, monkeypatch):
     sample.write_text("Philosophical treatises explore epistemic modalities and ontological truth.")
     runner.invoke(app, ["enroll", "Socrates", str(sample)])
 
-    # Verify single JSON
+    # Verify single JSON (short text damped)
     res_v_json = runner.invoke(app, ["verify", "Socrates", str(sample), "--format", "json"])
     assert res_v_json.exit_code == 0
     v_data = json.loads(res_v_json.output)
     assert v_data["author"] == "Socrates"
-    assert v_data["confidence"] > 90
+    assert v_data["short_document"] is True
+    assert v_data["raw_confidence"] > 90
+    assert v_data["confidence"] <= 45  # Damped due to 8-word length
 
     # Verify single CSV
     res_v_csv = runner.invoke(app, ["verify", "Socrates", str(sample), "--format", "csv"])
     assert res_v_csv.exit_code == 0
     v_lines = list(csv.reader(res_v_csv.output.strip().splitlines()))
-    assert v_lines[0] == ["document", "author", "words", "confidence", "burrows_delta", "verdict"]
+    assert v_lines[0] == [
+        "document",
+        "author",
+        "words",
+        "short_doc",
+        "confidence",
+        "burrows_delta",
+        "verdict",
+    ]
     assert v_lines[1][1] == "Socrates"
+    assert v_lines[1][3] == "yes"
 
     # Compare JSON & CSV
     f1 = tmp_path / "f1.txt"

@@ -11,6 +11,13 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .comparison import compare as compare_fingerprints
+from .explainability import (
+    MIN_RELIABLE_WORDS,
+    SHORT_DOC_WARNING,
+    compute_length_damping,
+    explain_aligning_traits,
+    format_aligning_traits_summary,
+)
 from .fingerprint import create_fingerprint
 from .ingestion import find_text_files, ingest_file
 from .models import AuthorType
@@ -137,6 +144,10 @@ def analyze(
                     "document": f.name,
                     "path": str(f),
                     "word_count": fp.word_count,
+                    "short_document": fp.word_count < MIN_RELIABLE_WORDS,
+                    "length_warning": (
+                        SHORT_DOC_WARNING if fp.word_count < MIN_RELIABLE_WORDS else None
+                    ),
                     "sentence_count": fp.sentence_count,
                     "author_type": fp.author_type.value,
                     "ai_confidence": round(fp.ai_confidence, 4),
@@ -156,6 +167,7 @@ def analyze(
             csv_headers = [
                 "document",
                 "words",
+                "short_doc",
                 "sentences",
                 "author_type",
                 "ai_confidence",
@@ -167,6 +179,7 @@ def analyze(
                 [
                     f.name,
                     fp.word_count,
+                    "yes" if fp.word_count < MIN_RELIABLE_WORDS else "no",
                     fp.sentence_count,
                     fp.author_type.value,
                     f"{fp.ai_confidence * 100:.1f}%",
@@ -196,9 +209,17 @@ def analyze(
         ai_count = 0
         uncertain_count = 0
         total_words = 0
+        short_count = 0
 
         for f, doc, fp in batch_results:
             total_words += fp.word_count
+            is_s = fp.word_count < MIN_RELIABLE_WORDS
+            if is_s:
+                short_count += 1
+                words_str = f"[yellow]{fp.word_count:,} ⚠️[/yellow]"
+            else:
+                words_str = f"{fp.word_count:,}"
+
             if fp.author_type == AuthorType.HUMAN:
                 human_count += 1
                 type_badge = "[bold green]HUMAN[/bold green]"
@@ -217,7 +238,7 @@ def analyze(
 
             table.add_row(
                 f.name,
-                f"{fp.word_count:,}",
+                words_str,
                 type_badge,
                 ai_conf_str,
                 re_str,
@@ -227,11 +248,18 @@ def analyze(
 
         console.print(table)
 
+        short_note = (
+            f"\n⚠️  [yellow]{short_count} short document(s) (<250 words) detected; "
+            f"stylometric metrics exhibit higher variance.[/yellow]"
+            if short_count > 0
+            else ""
+        )
         summary_text = (
             f"📂 Processed Directory: [bold]{path}[/bold]\n"
             f"📄 Documents Analyzed: {len(files)}  |  Total Words: {total_words:,}\n\n"
             f"Classification Breakdown: [green bold]{human_count} Human[/], "
             f"[red bold]{ai_count} AI[/], [yellow bold]{uncertain_count} Uncertain[/]"
+            f"{short_note}"
         )
         if not no_report:
             summary_text += f"\n📋 PDF Reports Saved: [cyan]{output}[/cyan]"
@@ -263,14 +291,20 @@ def analyze(
         pdf_path = output / f"{fingerprint_label}_fingerprint.pdf"
         generate_report(fingerprint, pdf_path)
 
+    is_short = fingerprint.word_count < MIN_RELIABLE_WORDS
+
     if out_format == "json":
-        print_json_data(fingerprint.to_dict())
+        fp_dict = fingerprint.to_dict()
+        fp_dict["short_document"] = is_short
+        fp_dict["length_warning"] = SHORT_DOC_WARNING if is_short else None
+        print_json_data(fp_dict)
         return
 
     if out_format == "csv":
         csv_headers = [
             "document",
             "words",
+            "short_doc",
             "sentences",
             "paragraphs",
             "author_type",
@@ -287,6 +321,7 @@ def analyze(
             [
                 path.name,
                 fingerprint.word_count,
+                "yes" if is_short else "no",
                 fingerprint.sentence_count,
                 paragraphs,
                 fingerprint.author_type.value,
@@ -302,6 +337,17 @@ def analyze(
         ]
         print_csv_rows(csv_headers, csv_rows)
         return
+
+    if is_short:
+        console.print(
+            Panel(
+                f"⚠️  [bold yellow]Short Document Notice "
+                f"({fingerprint.word_count} words < 250 words)[/bold yellow]\n"
+                f"[dim]{SHORT_DOC_WARNING}[/dim]",
+                border_style="yellow",
+                padding=(0, 1),
+            )
+        )
 
     # Header Panel
     ai_confidence_pct = int(fingerprint.ai_confidence * 100)
@@ -424,10 +470,18 @@ def compare(
         pdf_path = output / f"compare_{file1.stem}_{file2.stem}.pdf"
         generate_comparison_report(comp, f1, f2, pdf_path)
 
+    f1_short = f1.word_count < MIN_RELIABLE_WORDS
+    f2_short = f2.word_count < MIN_RELIABLE_WORDS
+    any_short = f1_short or f2_short
+
     if out_format == "json":
         data = {
             "file1": file1.name,
             "file2": file2.name,
+            "file1_words": f1.word_count,
+            "file2_words": f2.word_count,
+            "short_document": any_short,
+            "length_warning": SHORT_DOC_WARNING if any_short else None,
             "similarity": round(comp.cosine_similarity * 100, 2),
             "burrows_delta": round(comp.manhattan_delta, 4),
             "verdict": comp.same_author_likelihood.replace("_", " ").title(),
@@ -446,6 +500,23 @@ def compare(
         ]
         print_csv_rows(headers, rows)
         return
+
+    if any_short:
+        short_names = []
+        if f1_short:
+            short_names.append(f"{file1.name} ({f1.word_count} words)")
+        if f2_short:
+            short_names.append(f"{file2.name} ({f2.word_count} words)")
+        names_str = ", ".join(short_names)
+        console.print(
+            Panel(
+                f"⚠️  [bold yellow]Short Document Notice "
+                f"({names_str} < 250 words)[/bold yellow]\n"
+                f"[dim]{SHORT_DOC_WARNING}[/dim]",
+                border_style="yellow",
+                padding=(0, 1),
+            )
+        )
 
     console.print(
         Panel(f"Comparing: [bold]{file1.name}[/] vs [bold]{file2.name}[/]", title="COMPARISON")
@@ -643,7 +714,14 @@ def verify(
                     "path": str(f),
                     "author": name,
                     "words": fp.word_count,
-                    "confidence": round(comp.cosine_similarity * 100, 2),
+                    "short_document": fp.word_count < MIN_RELIABLE_WORDS,
+                    "length_warning": (
+                        SHORT_DOC_WARNING if fp.word_count < MIN_RELIABLE_WORDS else None
+                    ),
+                    "confidence": round(
+                        comp.cosine_similarity * 100 * compute_length_damping(fp.word_count), 2
+                    ),
+                    "raw_confidence": round(comp.cosine_similarity * 100, 2),
                     "burrows_delta": round(comp.manhattan_delta, 4),
                     "verdict": comp.same_author_likelihood.replace("_", " ").title(),
                 }
@@ -657,6 +735,7 @@ def verify(
                 "document",
                 "author",
                 "words",
+                "short_doc",
                 "confidence",
                 "burrows_delta",
                 "verdict",
@@ -666,7 +745,8 @@ def verify(
                     f.name,
                     name,
                     fp.word_count,
-                    f"{comp.cosine_similarity * 100:.1f}%",
+                    "yes" if fp.word_count < MIN_RELIABLE_WORDS else "no",
+                    f"{comp.cosine_similarity * 100 * compute_length_damping(fp.word_count):.1f}%",
                     f"{comp.manhattan_delta:.3f}",
                     comp.same_author_likelihood.replace("_", " ").title(),
                 ]
@@ -687,8 +767,16 @@ def verify(
         table.add_column("Verdict", justify="left", width=18)
 
         matched_count = 0
+        short_count = 0
         for f, doc, fp, comp in batch_results:
-            sim = comp.cosine_similarity * 100
+            is_s = fp.word_count < MIN_RELIABLE_WORDS
+            if is_s:
+                short_count += 1
+                words_str = f"[yellow]{fp.word_count:,} ⚠️[/yellow]"
+            else:
+                words_str = f"{fp.word_count:,}"
+
+            sim = comp.cosine_similarity * 100 * compute_length_damping(fp.word_count)
             bar = draw_bar(sim, width=12)
             sim_str = f"{sim:5.1f}% {bar}"
             delta_str = f"{comp.manhattan_delta:.3f}"
@@ -701,7 +789,7 @@ def verify(
             else:
                 verdict_styled = f"[bold red]{verdict}[/bold red]"
 
-            table.add_row(f.name, f"{fp.word_count:,}", sim_str, delta_str, verdict_styled)
+            table.add_row(f.name, words_str, sim_str, delta_str, verdict_styled)
 
         console.print(table)
         sample_info = (
@@ -709,11 +797,18 @@ def verify(
             if enrolled.sample_count > 1
             else ""
         )
+        short_note = (
+            f"\n⚠️  [yellow]{short_count} short document(s) (<250 words) detected; "
+            f"match confidence was proportionally damped.[/yellow]"
+            if short_count > 0
+            else ""
+        )
         console.print(
             Panel(
                 f"👤 Enrolled Author: [bold]{name}[/bold]{sample_info}\n"
                 f"📂 Directory: [bold]{path}[/bold] ({len(files)} documents)\n"
-                f"🎯 Strong Matches: [bold green]{matched_count}/{len(files)}[/bold green]",
+                f"🎯 Strong Matches: [bold green]{matched_count}/{len(files)}[/bold green]"
+                f"{short_note}",
                 title="BATCH VERIFICATION COMPLETE",
                 expand=False,
                 padding=(1, 2),
@@ -733,7 +828,10 @@ def verify(
         new_fingerprint = create_fingerprint(doc, label=path.stem)
         comp = compare_fingerprints(enrolled, new_fingerprint)
 
-    sim = comp.cosine_similarity * 100
+    is_short = new_fingerprint.word_count < MIN_RELIABLE_WORDS
+    damping = compute_length_damping(new_fingerprint.word_count)
+    raw_sim = comp.cosine_similarity * 100
+    sim = raw_sim * damping
 
     if out_format == "json":
         data = {
@@ -741,7 +839,10 @@ def verify(
             "path": str(path),
             "author": name,
             "words": new_fingerprint.word_count,
+            "short_document": is_short,
+            "length_warning": SHORT_DOC_WARNING if is_short else None,
             "confidence": round(sim, 2),
+            "raw_confidence": round(raw_sim, 2) if is_short else round(sim, 2),
             "burrows_delta": round(comp.manhattan_delta, 4),
             "verdict": comp.same_author_likelihood.replace("_", " ").title(),
         }
@@ -753,6 +854,7 @@ def verify(
             "document",
             "author",
             "words",
+            "short_doc",
             "confidence",
             "burrows_delta",
             "verdict",
@@ -762,6 +864,7 @@ def verify(
                 path.name,
                 name,
                 new_fingerprint.word_count,
+                "yes" if is_short else "no",
                 f"{sim:.1f}%",
                 f"{comp.manhattan_delta:.3f}",
                 comp.same_author_likelihood.replace("_", " ").title(),
@@ -770,16 +873,35 @@ def verify(
         print_csv_rows(csv_headers, csv_rows)
         return
 
+    if is_short:
+        console.print(
+            Panel(
+                f"⚠️  [bold yellow]Short Document Notice "
+                f"({new_fingerprint.word_count} words < 250 words)[/bold yellow]\n"
+                f"[dim]Stylometric metrics have higher variance on brief texts. "
+                f"Match confidence has been proportionally damped.[/dim]",
+                border_style="yellow",
+                padding=(0, 1),
+            )
+        )
+
     color = "green" if sim > 80 else "yellow" if sim > 60 else "red"
     sample_info = (
         f" ({enrolled.sample_count} samples rolling baseline)" if enrolled.sample_count > 1 else ""
     )
+    if is_short:
+        conf_line = (
+            f"Match Confidence: [{color} bold]{sim:.1f}%[/] "
+            f"[dim](damped from {raw_sim:.1f}% due to length)[/dim]"
+        )
+    else:
+        conf_line = f"Match Confidence: [{color} bold]{sim:.1f}%[/]"
 
     console.print(
         Panel(
             f"Author: [bold]{name}[/]{sample_info}\n"
-            f"File: [bold]{path.name}[/]\n\n"
-            f"Match Confidence: [{color} bold]{sim:.1f}%[/]\n"
+            f"File: [bold]{path.name}[/] ({new_fingerprint.word_count:,} words)\n\n"
+            f"{conf_line}\n"
             f"Result: [bold]{comp.same_author_likelihood.replace('_', ' ').title()}[/]",
             title="VERIFICATION RESULT",
             expand=False,
@@ -864,12 +986,22 @@ def identify(
 
                 candidate_scores.sort(key=lambda x: x[1].cosine_similarity, reverse=True)
                 best_cand_fp, best_comp = candidate_scores[0]
-                best_sim_pct = best_comp.cosine_similarity * 100
+                raw_sim_pct = best_comp.cosine_similarity * 100
+
+                # Length check & proportional damping
+                is_short = essay_fp.word_count < MIN_RELIABLE_WORDS
+                damping = compute_length_damping(essay_fp.word_count)
+                damped_sim_pct = raw_sim_pct * damping
 
                 margin = None
                 if len(candidate_scores) > 1:
                     runner_up_fp, runner_up_comp = candidate_scores[1]
-                    margin = best_sim_pct - (runner_up_comp.cosine_similarity * 100)
+                    runner_up_pct = runner_up_comp.cosine_similarity * 100 * damping
+                    margin = damped_sim_pct - runner_up_pct
+
+                # Explainability: top 3 aligning traits
+                aligning_traits = explain_aligning_traits(best_cand_fp, essay_fp, top_n=3)
+                traits_summary = format_aligning_traits_summary(aligning_traits)
 
                 if not no_report:
                     output.mkdir(parents=True, exist_ok=True)
@@ -877,7 +1009,20 @@ def identify(
                     pdf_path = output / f"identify_{f.stem}_{safe_name}.pdf"
                     generate_comparison_report(best_comp, best_cand_fp, essay_fp, pdf_path)
 
-                batch_identifications.append((f, essay_fp, best_cand_fp, best_comp, margin))
+                batch_identifications.append(
+                    (
+                        f,
+                        essay_fp,
+                        best_cand_fp,
+                        best_comp,
+                        margin,
+                        is_short,
+                        raw_sim_pct,
+                        damped_sim_pct,
+                        aligning_traits,
+                        traits_summary,
+                    )
+                )
                 progress.advance(task)
 
         if out_format == "json":
@@ -886,14 +1031,31 @@ def identify(
                     "submission": f.name,
                     "path": str(f),
                     "word_count": essay_fp.word_count,
+                    "short_document": is_short,
+                    "length_warning": SHORT_DOC_WARNING if is_short else None,
                     "top_match": best_cand_fp.label,
                     "sample_count": best_cand_fp.sample_count,
-                    "confidence": round(best_comp.cosine_similarity * 100, 2),
+                    "confidence": round(damped_sim_pct, 2),
+                    "raw_confidence": (
+                        round(raw_sim_pct, 2) if is_short else round(damped_sim_pct, 2)
+                    ),
                     "burrows_delta": round(best_comp.manhattan_delta, 4),
                     "verdict": best_comp.same_author_likelihood.replace("_", " ").title(),
                     "lead_margin": round(margin, 2) if margin is not None else None,
+                    "top_aligning_traits": [t["description"] for t in aligning_traits],
                 }
-                for f, essay_fp, best_cand_fp, best_comp, margin in batch_identifications
+                for (
+                    f,
+                    essay_fp,
+                    best_cand_fp,
+                    best_comp,
+                    margin,
+                    is_short,
+                    raw_sim_pct,
+                    damped_sim_pct,
+                    aligning_traits,
+                    _summary,
+                ) in batch_identifications
             ]
             print_json_data(batch_data)
             return
@@ -902,23 +1064,38 @@ def identify(
             csv_headers = [
                 "submission",
                 "words",
+                "short_doc",
                 "top_match",
                 "confidence",
                 "burrows_delta",
                 "verdict",
                 "lead_margin",
+                "top_aligning_traits",
             ]
             csv_rows = [
                 [
                     f.name,
                     essay_fp.word_count,
+                    "yes" if is_short else "no",
                     best_cand_fp.label,
-                    f"{best_comp.cosine_similarity * 100:.1f}%",
+                    f"{damped_sim_pct:.1f}%",
                     f"{best_comp.manhattan_delta:.3f}",
                     best_comp.same_author_likelihood.replace("_", " ").title(),
                     f"+{margin:.1f}%" if margin is not None else "",
+                    traits_summary,
                 ]
-                for f, essay_fp, best_cand_fp, best_comp, margin in batch_identifications
+                for (
+                    f,
+                    essay_fp,
+                    best_cand_fp,
+                    best_comp,
+                    margin,
+                    is_short,
+                    _raw,
+                    damped_sim_pct,
+                    _traits,
+                    traits_summary,
+                ) in batch_identifications
             ]
             print_csv_rows(csv_headers, csv_rows)
             return
@@ -929,19 +1106,37 @@ def identify(
             show_header=True,
             header_style="bold magenta",
         )
-        table.add_column("Submission", style="cyan", width=22)
-        table.add_column("Words", justify="right", width=8)
+        table.add_column("Submission", style="cyan", width=20)
+        table.add_column("Words", justify="right", width=9)
         table.add_column("Top Match", style="bold", width=18)
         table.add_column("Confidence", justify="left", width=18)
         table.add_column("Burrows Δ", justify="right", width=10)
-        table.add_column("Verdict", justify="left", width=16)
-        table.add_column("Lead Margin", justify="right", width=12)
+        table.add_column("Verdict", justify="left", width=15)
+        table.add_column("Lead Margin", justify="right", width=11)
+        table.add_column("Top Aligning Traits", style="dim", width=36)
 
         author_counts: dict[str, int] = {}
-        for f, essay_fp, best_cand_fp, best_comp, margin in batch_identifications:
-            sim = best_comp.cosine_similarity * 100
-            bar = draw_bar(sim, width=10)
-            conf_str = f"{sim:5.1f}% {bar}"
+        short_count = 0
+        for (
+            f,
+            essay_fp,
+            best_cand_fp,
+            best_comp,
+            margin,
+            is_short,
+            _raw_sim_pct,
+            damped_sim_pct,
+            _aligning_traits,
+            traits_summary,
+        ) in batch_identifications:
+            if is_short:
+                short_count += 1
+                words_display = f"[yellow]{essay_fp.word_count:,} ⚠️[/yellow]"
+            else:
+                words_display = f"{essay_fp.word_count:,}"
+
+            bar = draw_bar(damped_sim_pct, width=10)
+            conf_str = f"{damped_sim_pct:5.1f}% {bar}"
             delta_str = f"{best_comp.manhattan_delta:.3f}"
             verdict = best_comp.same_author_likelihood.replace("_", " ").title()
 
@@ -950,9 +1145,9 @@ def identify(
                 if best_cand_fp.sample_count > 1
                 else best_cand_fp.label
             )
-            if sim >= 80:
+            if damped_sim_pct >= 80:
                 top_match_str = f"[bold green]{cand_lbl}[/bold green]"
-            elif sim >= 60:
+            elif damped_sim_pct >= 60:
                 top_match_str = f"[bold yellow]{cand_lbl}[/bold yellow]"
             else:
                 top_match_str = f"[bold red]{cand_lbl}[/bold red]"
@@ -962,12 +1157,13 @@ def identify(
 
             table.add_row(
                 f.name,
-                f"{essay_fp.word_count:,}",
+                words_display,
                 top_match_str,
                 conf_str,
                 delta_str,
                 verdict,
                 margin_str,
+                traits_summary,
             )
 
         console.print(table)
@@ -976,11 +1172,18 @@ def identify(
             f"[bold cyan]{author}[/bold cyan] ({count})"
             for author, count in sorted(author_counts.items(), key=lambda x: x[1], reverse=True)
         )
+        short_note = (
+            f"\n⚠️  [yellow]{short_count} short submission(s) (<250 words) detected; "
+            f"attribution confidence was proportionally damped.[/yellow]"
+            if short_count > 0
+            else ""
+        )
         summary_text = (
             f"📂 Processed Directory: [bold]{path}[/bold]\n"
             f"📄 Submissions Evaluated: {len(files)} "
             f"against {len(enrolled_candidates)} candidates\n\n"
             f"Identified Distribution: {summary_breakdown}"
+            f"{short_note}"
         )
         if not no_report:
             summary_text += f"\n📋 PDF Reports Saved: [cyan]{output}[/cyan]"
@@ -1021,13 +1224,22 @@ def identify(
     candidate_scores.sort(key=lambda x: x[1].cosine_similarity, reverse=True)
 
     best_candidate_fp, best_comp = candidate_scores[0]
-    best_sim_pct = best_comp.cosine_similarity * 100
+    raw_best_sim_pct = best_comp.cosine_similarity * 100
+
+    # Length check & proportional damping
+    is_short = essay_fp.word_count < MIN_RELIABLE_WORDS
+    damping = compute_length_damping(essay_fp.word_count)
+    damped_best_sim_pct = raw_best_sim_pct * damping
 
     margin = None
     if len(candidate_scores) > 1:
         runner_up_fp, runner_up_comp = candidate_scores[1]
-        runner_up_pct = runner_up_comp.cosine_similarity * 100
-        margin = best_sim_pct - runner_up_pct
+        runner_up_pct = runner_up_comp.cosine_similarity * 100 * damping
+        margin = damped_best_sim_pct - runner_up_pct
+
+    # Explainability: top 4 aligning traits
+    aligning_traits = explain_aligning_traits(best_candidate_fp, essay_fp, top_n=4)
+    traits_summary = format_aligning_traits_summary(aligning_traits)
 
     if not no_report:
         output.mkdir(parents=True, exist_ok=True)
@@ -1040,17 +1252,24 @@ def identify(
             "essay": path.name,
             "path": str(path),
             "word_count": essay_fp.word_count,
+            "short_document": is_short,
+            "length_warning": SHORT_DOC_WARNING if is_short else None,
             "top_match": best_candidate_fp.label,
-            "confidence": round(best_sim_pct, 2),
+            "confidence": round(damped_best_sim_pct, 2),
+            "raw_confidence": (
+                round(raw_best_sim_pct, 2) if is_short else round(damped_best_sim_pct, 2)
+            ),
             "burrows_delta": round(best_comp.manhattan_delta, 4),
             "verdict": best_comp.same_author_likelihood.replace("_", " ").title(),
             "lead_margin": round(margin, 2) if margin is not None else None,
+            "aligning_traits": aligning_traits,
             "candidates": [
                 {
                     "rank": rank,
                     "candidate": cand_fp.label,
                     "samples": cand_fp.sample_count,
-                    "confidence": round(comp.cosine_similarity * 100, 2),
+                    "confidence": round(comp.cosine_similarity * 100 * damping, 2),
+                    "raw_confidence": round(comp.cosine_similarity * 100, 2),
                     "burrows_delta": round(comp.manhattan_delta, 4),
                     "verdict": comp.same_author_likelihood.replace("_", " ").title(),
                 }
@@ -1061,22 +1280,47 @@ def identify(
         return
 
     if out_format == "csv":
-        csv_headers = ["rank", "candidate", "samples", "confidence", "burrows_delta", "verdict"]
+        csv_headers = [
+            "rank",
+            "candidate",
+            "samples",
+            "confidence",
+            "burrows_delta",
+            "verdict",
+            "top_aligning_traits",
+        ]
         csv_rows = [
             [
                 rank,
                 cand_fp.label,
                 cand_fp.sample_count,
-                f"{comp.cosine_similarity * 100:.1f}%",
+                f"{comp.cosine_similarity * 100 * damping:.1f}%",
                 f"{comp.manhattan_delta:.3f}",
                 comp.same_author_likelihood.replace("_", " ").title(),
+                traits_summary if rank == 1 else "",
             ]
             for rank, (cand_fp, comp) in enumerate(candidate_scores[:top_k], start=1)
         ]
         print_csv_rows(csv_headers, csv_rows)
         return
 
-    color = "green" if best_sim_pct >= 80 else ("yellow" if best_sim_pct >= 60 else "red")
+    # Warning alert if document is short
+    if is_short:
+        console.print(
+            Panel(
+                f"⚠️  [bold yellow]Short Document Notice "
+                f"({essay_fp.word_count} words < 250 words)[/bold yellow]\n"
+                f"[dim]Stylometric metrics (such as MATTR, MTLD, and parse depth variance) have "
+                f"higher sampling noise on brief texts. "
+                f"Attribution confidence has been proportionally damped.[/dim]",
+                border_style="yellow",
+                padding=(0, 1),
+            )
+        )
+
+    color = (
+        "green" if damped_best_sim_pct >= 80 else ("yellow" if damped_best_sim_pct >= 60 else "red")
+    )
     margin_text = ""
     if margin is not None:
         margin_text = (
@@ -1089,12 +1333,24 @@ def identify(
         if best_candidate_fp.sample_count > 1
         else ""
     )
+    if is_short:
+        conf_line = (
+            f"Match Confidence: [{color} bold]{damped_best_sim_pct:.1f}%[/] "
+            f"[dim](damped from {raw_best_sim_pct:.1f}% due to length: "
+            f"{essay_fp.word_count} words)[/dim] "
+            f"({best_comp.same_author_likelihood.replace('_', ' ').title()})"
+        )
+    else:
+        conf_line = (
+            f"Match Confidence: [{color} bold]{damped_best_sim_pct:.1f}%[/] "
+            f"({best_comp.same_author_likelihood.replace('_', ' ').title()})"
+        )
+
     header_text = (
         f"📄 Essay: [bold]{path.name}[/bold] ({essay_fp.word_count:,} words)\n"
         f"👥 Enrolled Candidates Evaluated: {len(enrolled_candidates)}\n\n"
         f"🏆 Top Match: [{color} bold]{best_candidate_fp.label}[/]{sample_badge}\n"
-        f"Match Confidence: [{color} bold]{best_sim_pct:.1f}%[/] "
-        f"({best_comp.same_author_likelihood.replace('_', ' ').title()})"
+        f"{conf_line}"
         f"{margin_text}"
     )
     console.print(Panel(header_text, title="AUTHOR IDENTIFICATION", expand=False, padding=(1, 2)))
@@ -1112,7 +1368,7 @@ def identify(
     table.add_column("Verdict", justify="left")
 
     for rank, (cand_fp, comp) in enumerate(candidate_scores[:top_k], start=1):
-        sim = comp.cosine_similarity * 100
+        sim = comp.cosine_similarity * 100 * damping
         bar = draw_bar(sim, width=15)
         sim_col = f"{sim:5.1f}%  {bar}"
         delta_str = f"{comp.manhattan_delta:.3f}"
@@ -1128,8 +1384,19 @@ def identify(
 
     console.print(table)
 
+    # Attribution Explainability Card
+    console.print(
+        "\n  [bold cyan]🔍 Top Aligning Linguistic Traits (Idiolect Drivers):[/bold cyan]"
+    )
+    for t in aligning_traits:
+        console.print(
+            f"  • [bold]{t['description'].capitalize()}[/bold] "
+            f"[dim]({t['name']} — Δz = {t['z_delta']:.2f})[/dim]"
+        )
+    console.print()
+
     if not no_report:
-        console.print(f"\n  📋 Comparison report with top candidate saved: [cyan]{pdf_path}[/cyan]")
+        console.print(f"  📋 Comparison report with top candidate saved: [cyan]{pdf_path}[/cyan]")
 
 
 @app.command(name="list")
