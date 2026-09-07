@@ -1,0 +1,6 @@
+Landing a spacecraft in a lake would not be a safe or practical way to return to Earth. Here are a few reasons why: 
+1. Density: Water is much denser than air, so when a spacecraft falls into it from a high altitude, it will experience much more resistance and deceleration. This could cause the spacecraft to break apart or sustain serious damage upon impact. 
+2. Depth: Lakes are typically not very deep, so if a spacecraft were to land in one, it would have to do so at a very low altitude. This would not give the spacecraft enough time to slow down and make a safe landing. 
+3. Control: When a spacecraft returns to Earth, it needs to be able to control its descent and land in a specific location. This is not possible when landing in a lake, as the spacecraft would be at the mercy of the wind and currents. 
+4. Recovery: Finally, it would be very difficult to recover a spacecraft that has landed in a lake. Specialized equipment would be needed to lift it out of the water, which could be time-consuming and costly. 
+In summary, landing a spacecraft in a lake is not a safe or practical option. Instead, spacecraft are designed to land on solid ground, where they can touch down at a controlled speed and be easily recovered.

@@ -1,0 +1,1 @@
+They have a bunch of people cut out the foreground from the background ( rotoscoping ) and place it in depth using software . They move stuff around and paint out the seams . Then they re - render the movie from two virtual cameras . Turns out a lot people are n't very discerning when it comes to 3d , and it 's cheaper and less hassle than using two cameras during the shoot .

@@ -1,0 +1,5 @@
+There are a few reasons why we still have SD (standard definition) TV channels: 
+1. Some people still use older TVs that are not compatible with HD (high definition) signals. These TVs can only display SD channels, so if we only had HD channels, those people wouldn't be able to watch TV. 
+2. HD channels take up more bandwidth than SD channels, so it's not possible to have as many HD channels as we have SD channels. This means that if we only had HD channels, some channels might not be available. 
+3. HD channels also require more expensive equipment to produce, so some TV stations might not be able to afford to upgrade to HD. 
+Overall, it's important to have both SD and HD channels so that everyone can watch TV, regardless of what kind of TV they have or how much money they have.
