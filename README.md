@@ -31,9 +31,12 @@ idiolect verify "Student Name" submitted_paper.txt
 # Identify which enrolled student wrote an anonymous essay
 idiolect identify submission.txt
 
-# List or delete enrolled authors
+# List enrolled authors
 idiolect list
+
+# Delete an author profile or a specific sample from a profile
 idiolect delete "Student Name"
+idiolect delete "Student Name" --sample-id 2
 
 # Inspect an author's multi-sample profile, consistency, and rolling baseline
 idiolect profile "Student Name"

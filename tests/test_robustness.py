@@ -154,3 +154,40 @@ def test_store_batch_list_profiles_and_wal(tmp_path: Path):
     assert "Bob" in prof_map
     assert prof_map["Bob"].sample_count == 1
     assert len(prof_map["Bob"].samples) == 1
+
+
+def test_cli_delete_specific_sample(tmp_path: Path, monkeypatch):
+    test_db = tmp_path / "delete_sample.db"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    s1 = tmp_path / "s1.txt"
+    s2 = tmp_path / "s2.txt"
+    s1.write_text("First sample on literary analysis and rhetoric.")
+    s2.write_text("Second sample on historical argumentation and evidence.")
+
+    runner.invoke(app, ["enroll", "AuthorX", str(s1)])
+    runner.invoke(app, ["enroll", "AuthorX", str(s2)])
+
+    store = idiolect.store.FingerprintStore(db_path=test_db)
+    samples = store.get_samples("AuthorX")
+    assert len(samples) == 2
+    target_id = samples[0].id
+
+    # Delete sample 1
+    res = runner.invoke(app, ["delete", "AuthorX", "--sample-id", str(target_id)])
+    assert res.exit_code == 0
+    assert f"Removed sample #{target_id}" in res.output
+
+    # Remaining samples
+    rem_samples = store.get_samples("AuthorX")
+    assert len(rem_samples) == 1
+    assert rem_samples[0].id != target_id
+
+    # Delete non-existent sample ID
+    res_err = runner.invoke(app, ["delete", "AuthorX", "--sample-id", "9999"])
+    assert res_err.exit_code != 0
+    assert "Sample ID 9999 not found" in res_err.output

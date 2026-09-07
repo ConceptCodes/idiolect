@@ -382,10 +382,17 @@ class FingerprintStore:
             conn.commit()
             return deleted
 
-    def delete_sample(self, author_label: str, sample_id: int) -> Fingerprint | None:
+    def delete_sample(
+        self,
+        author_label: str,
+        sample_id: int,
+        recency_decay: float = 0.90,
+        max_samples: int = 20,
+    ) -> Fingerprint | None:
         """Delete a specific sample by ID and re-aggregate remaining samples.
 
-        Returns updated composite Fingerprint, or None if author was deleted (0 samples left).
+        Returns updated composite Fingerprint, or None if author was deleted (0 samples left)
+        or if sample ID was not found.
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -408,7 +415,12 @@ class FingerprintStore:
                 return None
 
             all_fps = [Fingerprint.from_json(r[0]) for r in rows]
-            composite_fp = aggregate_fingerprints(all_fps, label=author_label)
+            composite_fp = aggregate_fingerprints(
+                all_fps,
+                label=author_label,
+                recency_decay=recency_decay,
+                max_samples=max_samples,
+            )
             cursor.execute(
                 """
                 INSERT OR REPLACE INTO fingerprints

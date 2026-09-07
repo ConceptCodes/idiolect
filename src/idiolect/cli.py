@@ -1800,9 +1800,38 @@ def profile(
 
 
 @app.command()
-def delete(name: str = typer.Argument(..., help="Name of the enrolled fingerprint to delete.")):
-    """Delete an enrolled fingerprint."""
+def delete(
+    name: str = typer.Argument(..., help="Name of the enrolled author to delete."),
+    sample_id: Optional[int] = typer.Option(
+        None,
+        "--sample-id",
+        "-s",
+        help="Specific sample ID to remove rather than deleting entire profile.",
+    ),
+):
+    """Delete an enrolled author profile or a specific sample from a profile."""
     store = get_store()
+    if sample_id is not None:
+        updated_fp = store.delete_sample(name, sample_id)
+        if updated_fp is not None:
+            console.print(
+                f"[bold green]✓ Removed sample #{sample_id} from profile:[/bold green] "
+                f"[bold cyan]{name}[/bold cyan]\n"
+                f"  📈 Baseline: [bold]{updated_fp.sample_count} samples[/bold] | "
+                f"[bold]{updated_fp.word_count:,} words[/bold]"
+            )
+        else:
+            if not store.get(name):
+                console.print(
+                    f"[bold green]✓ Removed last sample; deleted profile:[/bold green] {name}"
+                )
+            else:
+                console.print(
+                    f"[bold red]Error:[/] Sample ID {sample_id} not found for author '{name}'."
+                )
+                raise typer.Exit(1)
+        return
+
     if store.delete(name):
         console.print(f"[bold green]✓ Deleted enrolled author:[/bold green] {name}")
     else:
