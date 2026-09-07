@@ -1,8 +1,11 @@
+# Byte-compiled / optimized / C extensions
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# Distribution / packaging
 build/
 develop-eggs/
 dist/
@@ -23,18 +26,71 @@ MANIFEST
 
 # Virtual environments
 .env
-.venv
+.env.*
+!.env.example
+.venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 
-# Testing
+# Testing and coverage
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.tox/
+.nox/
 
-# Local PDF outputs
-*.pdf
+# Linters, formatters, and type checkers
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Database files & journals
 *.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.sqlite
+
+# Application artifacts & local store
+.idiolect/
+*.pdf
+*.log
+
+# Temporary and cache directories
+tmp/
+temp/
+*.tmp
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.code-workspace
