@@ -59,3 +59,73 @@ def test_find_text_files_and_ingest_path(tmp_path):
     # Ingest path on single file
     single_doc = ingest_path(f1)
     assert "The journey began early" in single_doc.cleaned_text
+
+
+def test_docx_ingestion(tmp_path):
+    import docx
+
+    from idiolect.ingestion import extract_text_from_docx, find_text_files, ingest_file
+
+    docx_path = tmp_path / "submission.docx"
+    doc = docx.Document()
+    doc.add_paragraph("Stylometry provides deep insight into authentic voice.")
+    doc.add_paragraph("Consistent syntax patterns distinguish distinct authors.")
+    table = doc.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].text = "Cell A"
+    table.rows[0].cells[1].text = "Cell B"
+    doc.save(docx_path)
+
+    extracted = extract_text_from_docx(docx_path)
+    assert "Stylometry provides deep insight" in extracted
+    assert "Consistent syntax patterns" in extracted
+    assert "Cell A | Cell B" in extracted
+
+    # Verify discoverable by find_text_files
+    files = find_text_files(tmp_path)
+    assert docx_path in files
+
+    # Verify ingest_file
+    document = ingest_file(docx_path)
+    assert document.word_count > 0
+    assert "Stylometry provides deep insight" in document.cleaned_text
+
+
+def test_pdf_ingestion(tmp_path):
+    from fpdf import FPDF
+
+    from idiolect.ingestion import extract_text_from_pdf, find_text_files, ingest_file
+
+    pdf_path = tmp_path / "essay.pdf"
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12)
+    pdf.cell(text="This is an authentic student essay submitted in PDF format.")
+    pdf.output(str(pdf_path))
+
+    extracted = extract_text_from_pdf(pdf_path)
+    assert "authentic student essay" in extracted
+
+    # Verify discoverable by find_text_files
+    files = find_text_files(tmp_path)
+    assert pdf_path in files
+
+    # Verify ingest_file
+    document = ingest_file(pdf_path)
+    assert document.word_count > 0
+    assert "authentic student essay" in document.cleaned_text
+
+
+def test_invalid_and_empty_extraction(tmp_path):
+    import pytest
+
+    from idiolect.ingestion import extract_text_from_docx, extract_text_from_pdf
+
+    bad_docx = tmp_path / "corrupt.docx"
+    bad_docx.write_bytes(b"not a valid zip file")
+    with pytest.raises(ValueError, match="Failed to extract text from Word document"):
+        extract_text_from_docx(bad_docx)
+
+    bad_pdf = tmp_path / "corrupt.pdf"
+    bad_pdf.write_bytes(b"not a valid pdf")
+    with pytest.raises(ValueError, match="Failed to extract text from PDF document"):
+        extract_text_from_pdf(bad_pdf)

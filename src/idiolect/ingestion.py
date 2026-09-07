@@ -71,10 +71,72 @@ def clean_text(raw: str) -> str:
     return text.strip()
 
 
+def extract_text_from_docx(path: Path) -> str:
+    """Extract text from a Microsoft Word (.docx) document.
+
+    Extracts paragraphs and table rows, preserving structural boundaries.
+    Falls back to direct XML parsing if python-docx parsing encounters issues.
+    """
+    try:
+        import docx
+
+        doc = docx.Document(path)
+        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                if cells:
+                    paragraphs.append(" | ".join(cells))
+        if paragraphs:
+            return "\n\n".join(paragraphs)
+    except Exception:
+        pass
+
+    # Fallback to standard library zipfile + elementtree extraction
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as z:
+            xml_content = z.read("word/document.xml")
+        root = ET.fromstring(xml_content)
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        paras = []
+        for p in root.findall(".//w:p", ns):
+            texts = [node.text for node in p.findall(".//w:t", ns) if node.text]
+            if texts:
+                paras.append("".join(texts))
+        return "\n\n".join(paras)
+    except Exception as e:
+        raise ValueError(f"Failed to extract text from Word document {path}: {e}")
+
+
+def extract_text_from_pdf(path: Path) -> str:
+    """Extract text from a PDF document using pypdf.
+
+    Preserves page breaks as paragraph dividers.
+    """
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(path))
+        pages_text = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t and t.strip():
+                pages_text.append(t.strip())
+        if not pages_text:
+            raise ValueError(f"No extractable text found in PDF: {path}")
+        return "\n\n".join(pages_text)
+    except Exception as e:
+        raise ValueError(f"Failed to extract text from PDF document {path}: {e}")
+
+
 def load_text(path: Path) -> str:
     """Load text from a file path.
 
-    Currently supports .txt files. PDF support will be added later.
+    Supports plain text (.txt, .md, .text, .markdown, .rst),
+    Microsoft Word (.docx), and PDF (.pdf) documents.
     """
     path = Path(path)
 
@@ -83,13 +145,18 @@ def load_text(path: Path) -> str:
 
     suffix = path.suffix.lower()
 
-    if suffix in (".txt", ".md", ".text"):
-        return path.read_text(encoding="utf-8")
+    if suffix in (".txt", ".md", ".text", ".markdown", ".rst"):
+        return path.read_text(encoding="utf-8", errors="replace")
+    elif suffix == ".docx":
+        return extract_text_from_docx(path)
     elif suffix == ".pdf":
-        raise NotImplementedError("PDF input is not yet supported. Convert to plain text first.")
+        return extract_text_from_pdf(path)
     else:
-        # Try reading as plain text
-        return path.read_text(encoding="utf-8")
+        # Fallback to plain text read with error replacement
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return path.read_text(encoding="utf-8", errors="replace")
 
 
 def ingest(text: str, source_path: str | None = None) -> Document:
@@ -143,26 +210,32 @@ def ingest_file(path: Path) -> Document:
     return ingest(raw, source_path=str(path))
 
 
+SUPPORTED_EXTENSIONS = {
+    ".txt",
+    ".text",
+    ".md",
+    ".markdown",
+    ".rst",
+    ".docx",
+    ".pdf",
+}
+
+
 def find_text_files(path: Path) -> list[Path]:
-    """Find all supported text files from a single file or directory.
+    """Find all supported documents from a single file or directory.
 
-    Args:
-        path: Path to a file or directory.
-
-    Returns:
-        Sorted list of Path objects for discovered text files.
+    Supported extensions: .txt, .md, .text, .markdown, .rst, .docx, .pdf.
     """
     path = Path(path)
     if path.is_file():
         return [path]
     if path.is_dir():
-        supported_suffixes = {".txt", ".text", ".md", ".markdown", ".rst"}
         files = [
             p
             for p in path.iterdir()
             if p.is_file()
             and not p.name.startswith(".")
-            and (p.suffix.lower() in supported_suffixes or not p.suffix)
+            and (p.suffix.lower() in SUPPORTED_EXTENSIONS or not p.suffix)
         ]
         return sorted(files, key=lambda p: p.name.lower())
     return []

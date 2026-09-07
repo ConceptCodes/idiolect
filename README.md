@@ -61,7 +61,7 @@ Authors write differently across prompts, genres, and time. Rather than relying 
 
 ### Batch Folder Processing
 
-Process entire directories containing `.txt`, `.md`, and `.rst` documents in a single command:
+Process entire directories containing `.docx`, `.pdf`, `.txt`, `.md`, and `.rst` documents in a single command:
 
 ```bash
 # Batch analyze an entire folder of essays with summary breakdown table
@@ -76,6 +76,37 @@ idiolect enroll "Student Name" ./student_samples/
 # Batch verify all documents in a folder against an enrolled author
 idiolect verify "Student Name" ./submissions/
 ```
+
+### Native Document Ingestion (.docx & .pdf)
+
+Students rarely submit plain text files; they submit Microsoft Word (.docx) or Adobe PDF (.pdf) documents. `idiolect` natively parses `.docx` and `.pdf` files without manual copy-pasting or external conversion tools:
+
+- **Word Documents (`.docx`)**: Extracts paragraph text and structured table rows.
+- **PDF Files (`.pdf`)**: Extracts text pages and preserves structural divisions.
+- Works seamlessly in both single-file commands and folder batch processing (`.txt`, `.docx`, `.pdf`, `.md`, `.rst`).
+
+### CSV / JSON Output Mode (LMS & Grading Pipeline Integration)
+
+All core inspection, analysis, and identification commands support `--format table|json|csv` (with `--json` as an alias) for headless automation, scripting, and LMS integration (Canvas, Blackboard, Moodle):
+
+```bash
+# Export batch identification results as CSV for Canvas or Blackboard gradebooks
+idiolect identify ./submissions/ --format csv > results.csv
+
+# Output machine-readable JSON for LMS webhook / automated grading script
+idiolect identify ./submissions/ --format json > results.json
+
+# Batch analyze essay directory and export summary metrics to CSV
+idiolect analyze ./essays/ --format csv > stylometric_metrics.csv
+
+# Export enrolled author roster and consistency ratings
+idiolect list --format csv > enrolled_students.csv
+
+# Inspect author profile structure in JSON
+idiolect profile "Student Name" --format json
+```
+
+When `--format csv` or `--format json` is selected, standard output is clean and free of ANSI styling, spinners, or table borders—allowing direct stdout redirection (`> output.csv`).
 
 ## Persistence & Storage
 

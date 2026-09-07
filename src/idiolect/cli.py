@@ -1,5 +1,8 @@
+import csv
+import io
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -17,6 +20,21 @@ from .store import FingerprintStore
 
 app = typer.Typer(name="idiolect", help="Linguistic fingerprinting CLI")
 console = Console()
+
+
+def print_csv_rows(headers: list[str], rows: list[list[Any]]) -> None:
+    """Print clean CSV formatted data to stdout."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow(row)
+    print(output.getvalue().strip())
+
+
+def print_json_data(data: Any) -> None:
+    """Print formatted JSON data to stdout."""
+    print(json.dumps(data, indent=2))
 
 
 def get_store(db_path: Path | None = None) -> FingerprintStore:
@@ -67,12 +85,25 @@ def analyze(
     label: Optional[str] = typer.Option(
         None, "--label", "-l", help="Label for the fingerprint (single file mode only)."
     ),
-    json: bool = typer.Option(False, "--json", help="Also output raw fingerprint JSON."),
+    format: str = typer.Option(
+        "table",
+        "--format",
+        "-f",
+        help="Output format: 'table' (default), 'json', or 'csv'.",
+    ),
+    json: bool = typer.Option(False, "--json", help="Alias for --format json."),
     no_report: bool = typer.Option(
         False, "--no-report", help="Skip PDF generation, just print summary to console."
     ),
 ):
     """Analyze a text file or directory of files and generate fingerprint + PDF reports."""
+    out_format = "json" if json else format.lower()
+    if out_format not in ("table", "json", "csv"):
+        console.print(
+            f"[bold red]Error:[/] Invalid format '{out_format}'. Must be 'table', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
     if path.is_dir():
         files = find_text_files(path)
         if not files:
@@ -84,6 +115,7 @@ def analyze(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             transient=True,
+            disable=(out_format != "table"),
         ) as progress:
             task = progress.add_task(f"Analyzing {len(files)} documents...", total=len(files))
             for f in files:
@@ -98,6 +130,54 @@ def analyze(
 
                 batch_results.append((f, doc, fp))
                 progress.advance(task)
+
+        if out_format == "json":
+            batch_data = [
+                {
+                    "document": f.name,
+                    "path": str(f),
+                    "word_count": fp.word_count,
+                    "sentence_count": fp.sentence_count,
+                    "author_type": fp.author_type.value,
+                    "ai_confidence": round(fp.ai_confidence, 4),
+                    "reading_ease": round(
+                        fp.features.get("readability.flesch_reading_ease", 60.0), 2
+                    ),
+                    "lexical_richness": round(fp.axes.get("lexical_richness", 0.0), 2),
+                    "syntactic_complexity": round(fp.axes.get("syntactic_complexity", 0.0), 2),
+                    "axes": {k: round(v, 2) for k, v in fp.axes.items()},
+                }
+                for f, _doc, fp in batch_results
+            ]
+            print_json_data(batch_data)
+            return
+
+        if out_format == "csv":
+            csv_headers = [
+                "document",
+                "words",
+                "sentences",
+                "author_type",
+                "ai_confidence",
+                "reading_ease",
+                "lexical_richness",
+                "syntactic_complexity",
+            ]
+            csv_rows = [
+                [
+                    f.name,
+                    fp.word_count,
+                    fp.sentence_count,
+                    fp.author_type.value,
+                    f"{fp.ai_confidence * 100:.1f}%",
+                    f"{fp.features.get('readability.flesch_reading_ease', 60.0):.1f}",
+                    f"{fp.axes.get('lexical_richness', 0.0):.1f}",
+                    f"{fp.axes.get('syntactic_complexity', 0.0):.1f}",
+                ]
+                for f, _doc, fp in batch_results
+            ]
+            print_csv_rows(csv_headers, csv_rows)
+            return
 
         table = Table(
             title=f"Batch Linguistic Analysis ({len(files)} Documents)",
@@ -168,12 +248,60 @@ def analyze(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True,
+        disable=(out_format != "table"),
     ) as progress:
         progress.add_task(
             description=f"Ingesting [cyan]{path.name}[/cyan] and analyzing...", total=None
         )
         doc = ingest_file(path)
         fingerprint = create_fingerprint(doc, label=fingerprint_label)
+
+    paragraphs = len([p for p in doc.cleaned_text.split("\n\n") if p.strip()]) or 1
+
+    if not no_report:
+        output.mkdir(parents=True, exist_ok=True)
+        pdf_path = output / f"{fingerprint_label}_fingerprint.pdf"
+        generate_report(fingerprint, pdf_path)
+
+    if out_format == "json":
+        print_json_data(fingerprint.to_dict())
+        return
+
+    if out_format == "csv":
+        csv_headers = [
+            "document",
+            "words",
+            "sentences",
+            "paragraphs",
+            "author_type",
+            "ai_confidence",
+            "lexical_richness",
+            "syntactic_complexity",
+            "formality",
+            "epistemic_stance",
+            "pacing_cadence",
+            "affective_intensity",
+            "interactive_engagement",
+        ]
+        csv_rows = [
+            [
+                path.name,
+                fingerprint.word_count,
+                fingerprint.sentence_count,
+                paragraphs,
+                fingerprint.author_type.value,
+                f"{fingerprint.ai_confidence * 100:.1f}%",
+                f"{fingerprint.axes.get('lexical_richness', 0.0):.1f}",
+                f"{fingerprint.axes.get('syntactic_complexity', 0.0):.1f}",
+                f"{fingerprint.axes.get('formality', 0.0):.1f}",
+                f"{fingerprint.axes.get('epistemic_stance', 0.0):.1f}",
+                f"{fingerprint.axes.get('pacing_cadence', 0.0):.1f}",
+                f"{fingerprint.axes.get('affective_intensity', 0.0):.1f}",
+                f"{fingerprint.axes.get('interactive_engagement', 0.0):.1f}",
+            ]
+        ]
+        print_csv_rows(csv_headers, csv_rows)
+        return
 
     # Header Panel
     ai_confidence_pct = int(fingerprint.ai_confidence * 100)
@@ -182,8 +310,6 @@ def analyze(
         if fingerprint.author_type == AuthorType.HUMAN
         else ("red" if fingerprint.author_type == AuthorType.AI else "yellow")
     )
-
-    paragraphs = len([p for p in doc.cleaned_text.split("\n\n") if p.strip()]) or 1
 
     header_text = (
         f"📄 Document: [bold]{path.name}[/bold]\n"
@@ -230,13 +356,7 @@ def analyze(
 
     console.print()
 
-    if json:
-        console.print(fingerprint.to_json())
-
     if not no_report:
-        output.mkdir(parents=True, exist_ok=True)
-        pdf_path = output / f"{fingerprint_label}_fingerprint.pdf"
-        generate_report(fingerprint, pdf_path)
         console.print(f"  📋 Report saved: [cyan]{pdf_path}[/cyan]")
 
 
@@ -264,13 +384,30 @@ def compare(
         "-o",
         help="Output directory for the PDF report (default: 'artifacts').",
     ),
+    format: str = typer.Option(
+        "table",
+        "--format",
+        "-f",
+        help="Output format: 'table' (default), 'json', or 'csv'.",
+    ),
+    json: bool = typer.Option(False, "--json", help="Alias for --format json."),
     no_report: bool = typer.Option(
         False, "--no-report", help="Skip PDF report generation, only print summary."
     ),
 ):
     """Compare two text files and determine if they share authorship."""
+    out_format = "json" if json else format.lower()
+    if out_format not in ("table", "json", "csv"):
+        console.print(
+            f"[bold red]Error:[/] Invalid format '{out_format}'. Must be 'table', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
     with Progress(
-        SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+        disable=(out_format != "table"),
     ) as progress:
         progress.add_task(description="Ingesting files and analyzing...", total=None)
 
@@ -281,6 +418,34 @@ def compare(
         f2 = create_fingerprint(doc2, label=file2.stem)
 
         comp = compare_fingerprints(f1, f2)
+
+    if not no_report:
+        output.mkdir(parents=True, exist_ok=True)
+        pdf_path = output / f"compare_{file1.stem}_{file2.stem}.pdf"
+        generate_comparison_report(comp, f1, f2, pdf_path)
+
+    if out_format == "json":
+        data = {
+            "file1": file1.name,
+            "file2": file2.name,
+            "similarity": round(comp.cosine_similarity * 100, 2),
+            "burrows_delta": round(comp.manhattan_delta, 4),
+            "verdict": comp.same_author_likelihood.replace("_", " ").title(),
+            "axis_deltas": {k: round(v, 2) for k, v in comp.axis_deltas.items()},
+            "most_similar_features": comp.most_similar_features,
+            "most_divergent_features": comp.most_divergent_features,
+        }
+        print_json_data(data)
+        return
+
+    if out_format == "csv":
+        headers = ["axis", "delta"]
+        rows = [
+            [axis.replace("_", " ").title(), f"{delta:.2f}"]
+            for axis, delta in comp.axis_deltas.items()
+        ]
+        print_csv_rows(headers, rows)
+        return
 
     console.print(
         Panel(f"Comparing: [bold]{file1.name}[/] vs [bold]{file2.name}[/]", title="COMPARISON")
@@ -313,9 +478,6 @@ def compare(
             console.print(f"  • {f}")
 
     if not no_report:
-        output.mkdir(parents=True, exist_ok=True)
-        pdf_path = output / f"compare_{file1.stem}_{file2.stem}.pdf"
-        generate_comparison_report(comp, f1, f2, pdf_path)
         console.print(f"\n  📋 Comparison report saved: [cyan]{pdf_path}[/cyan]")
 
 
@@ -428,8 +590,22 @@ def verify(
         dir_okay=True,
         readable=True,
     ),
+    format: str = typer.Option(
+        "table",
+        "--format",
+        "-f",
+        help="Output format: 'table' (default), 'json', or 'csv'.",
+    ),
+    json: bool = typer.Option(False, "--json", help="Alias for --format json."),
 ):
     """Verify if a text file or directory of files matches an enrolled author."""
+    out_format = "json" if json else format.lower()
+    if out_format not in ("table", "json", "csv"):
+        console.print(
+            f"[bold red]Error:[/] Invalid format '{out_format}'. Must be 'table', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
     store = get_store()
     enrolled = store.get(name)
     if not enrolled:
@@ -447,6 +623,7 @@ def verify(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             transient=True,
+            disable=(out_format != "table"),
         ) as progress:
             task = progress.add_task(
                 f"Verifying {len(files)} documents against {name}...", total=len(files)
@@ -458,6 +635,45 @@ def verify(
                 comp = compare_fingerprints(enrolled, new_fingerprint)
                 batch_results.append((f, doc, new_fingerprint, comp))
                 progress.advance(task)
+
+        if out_format == "json":
+            batch_data = [
+                {
+                    "document": f.name,
+                    "path": str(f),
+                    "author": name,
+                    "words": fp.word_count,
+                    "confidence": round(comp.cosine_similarity * 100, 2),
+                    "burrows_delta": round(comp.manhattan_delta, 4),
+                    "verdict": comp.same_author_likelihood.replace("_", " ").title(),
+                }
+                for f, _doc, fp, comp in batch_results
+            ]
+            print_json_data(batch_data)
+            return
+
+        if out_format == "csv":
+            csv_headers = [
+                "document",
+                "author",
+                "words",
+                "confidence",
+                "burrows_delta",
+                "verdict",
+            ]
+            csv_rows = [
+                [
+                    f.name,
+                    name,
+                    fp.word_count,
+                    f"{comp.cosine_similarity * 100:.1f}%",
+                    f"{comp.manhattan_delta:.3f}",
+                    comp.same_author_likelihood.replace("_", " ").title(),
+                ]
+                for f, _doc, fp, comp in batch_results
+            ]
+            print_csv_rows(csv_headers, csv_rows)
+            return
 
         table = Table(
             title=f"Batch Author Verification Against '{name}' ({len(files)} Documents)",
@@ -507,7 +723,10 @@ def verify(
 
     # Single-file mode
     with Progress(
-        SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+        disable=(out_format != "table"),
     ) as progress:
         progress.add_task(description=f"Verifying against [cyan]{name}[/cyan]...", total=None)
         doc = ingest_file(path)
@@ -515,6 +734,42 @@ def verify(
         comp = compare_fingerprints(enrolled, new_fingerprint)
 
     sim = comp.cosine_similarity * 100
+
+    if out_format == "json":
+        data = {
+            "document": path.name,
+            "path": str(path),
+            "author": name,
+            "words": new_fingerprint.word_count,
+            "confidence": round(sim, 2),
+            "burrows_delta": round(comp.manhattan_delta, 4),
+            "verdict": comp.same_author_likelihood.replace("_", " ").title(),
+        }
+        print_json_data(data)
+        return
+
+    if out_format == "csv":
+        csv_headers = [
+            "document",
+            "author",
+            "words",
+            "confidence",
+            "burrows_delta",
+            "verdict",
+        ]
+        csv_rows = [
+            [
+                path.name,
+                name,
+                new_fingerprint.word_count,
+                f"{sim:.1f}%",
+                f"{comp.manhattan_delta:.3f}",
+                comp.same_author_likelihood.replace("_", " ").title(),
+            ]
+        ]
+        print_csv_rows(csv_headers, csv_rows)
+        return
+
     color = "green" if sim > 80 else "yellow" if sim > 60 else "red"
     sample_info = (
         f" ({enrolled.sample_count} samples rolling baseline)" if enrolled.sample_count > 1 else ""
@@ -552,11 +807,25 @@ def identify(
         "-o",
         help="Output directory for the PDF comparison report(s) (default: 'artifacts').",
     ),
+    format: str = typer.Option(
+        "table",
+        "--format",
+        "-f",
+        help="Output format: 'table' (default), 'json', or 'csv'.",
+    ),
+    json: bool = typer.Option(False, "--json", help="Alias for --format json."),
     no_report: bool = typer.Option(
         False, "--no-report", help="Skip generating PDF comparison report(s)."
     ),
 ):
     """Identify which enrolled student/author wrote an essay based on stylometric similarity."""
+    out_format = "json" if json else format.lower()
+    if out_format not in ("table", "json", "csv"):
+        console.print(
+            f"[bold red]Error:[/] Invalid format '{out_format}'. Must be 'table', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
     store = get_store()
     enrolled_candidates = store.get_all()
 
@@ -578,6 +847,7 @@ def identify(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             transient=True,
+            disable=(out_format != "table"),
         ) as progress:
             task = progress.add_task(
                 f"Identifying authors for {len(files)} submissions...", total=len(files)
@@ -609,6 +879,49 @@ def identify(
 
                 batch_identifications.append((f, essay_fp, best_cand_fp, best_comp, margin))
                 progress.advance(task)
+
+        if out_format == "json":
+            batch_data = [
+                {
+                    "submission": f.name,
+                    "path": str(f),
+                    "word_count": essay_fp.word_count,
+                    "top_match": best_cand_fp.label,
+                    "sample_count": best_cand_fp.sample_count,
+                    "confidence": round(best_comp.cosine_similarity * 100, 2),
+                    "burrows_delta": round(best_comp.manhattan_delta, 4),
+                    "verdict": best_comp.same_author_likelihood.replace("_", " ").title(),
+                    "lead_margin": round(margin, 2) if margin is not None else None,
+                }
+                for f, essay_fp, best_cand_fp, best_comp, margin in batch_identifications
+            ]
+            print_json_data(batch_data)
+            return
+
+        if out_format == "csv":
+            csv_headers = [
+                "submission",
+                "words",
+                "top_match",
+                "confidence",
+                "burrows_delta",
+                "verdict",
+                "lead_margin",
+            ]
+            csv_rows = [
+                [
+                    f.name,
+                    essay_fp.word_count,
+                    best_cand_fp.label,
+                    f"{best_comp.cosine_similarity * 100:.1f}%",
+                    f"{best_comp.manhattan_delta:.3f}",
+                    best_comp.same_author_likelihood.replace("_", " ").title(),
+                    f"+{margin:.1f}%" if margin is not None else "",
+                ]
+                for f, essay_fp, best_cand_fp, best_comp, margin in batch_identifications
+            ]
+            print_csv_rows(csv_headers, csv_rows)
+            return
 
         # Batch Table
         table = Table(
@@ -684,7 +997,10 @@ def identify(
 
     # Single-file mode
     with Progress(
-        SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+        disable=(out_format != "table"),
     ) as progress:
         progress.add_task(
             description=(
@@ -706,13 +1022,63 @@ def identify(
 
     best_candidate_fp, best_comp = candidate_scores[0]
     best_sim_pct = best_comp.cosine_similarity * 100
-    color = "green" if best_sim_pct >= 80 else ("yellow" if best_sim_pct >= 60 else "red")
 
-    margin_text = ""
+    margin = None
     if len(candidate_scores) > 1:
         runner_up_fp, runner_up_comp = candidate_scores[1]
         runner_up_pct = runner_up_comp.cosine_similarity * 100
         margin = best_sim_pct - runner_up_pct
+
+    if not no_report:
+        output.mkdir(parents=True, exist_ok=True)
+        safe_name = best_candidate_fp.label.replace(" ", "_")
+        pdf_path = output / f"identify_{path.stem}_{safe_name}.pdf"
+        generate_comparison_report(best_comp, best_candidate_fp, essay_fp, pdf_path)
+
+    if out_format == "json":
+        data = {
+            "essay": path.name,
+            "path": str(path),
+            "word_count": essay_fp.word_count,
+            "top_match": best_candidate_fp.label,
+            "confidence": round(best_sim_pct, 2),
+            "burrows_delta": round(best_comp.manhattan_delta, 4),
+            "verdict": best_comp.same_author_likelihood.replace("_", " ").title(),
+            "lead_margin": round(margin, 2) if margin is not None else None,
+            "candidates": [
+                {
+                    "rank": rank,
+                    "candidate": cand_fp.label,
+                    "samples": cand_fp.sample_count,
+                    "confidence": round(comp.cosine_similarity * 100, 2),
+                    "burrows_delta": round(comp.manhattan_delta, 4),
+                    "verdict": comp.same_author_likelihood.replace("_", " ").title(),
+                }
+                for rank, (cand_fp, comp) in enumerate(candidate_scores[:top_k], start=1)
+            ],
+        }
+        print_json_data(data)
+        return
+
+    if out_format == "csv":
+        csv_headers = ["rank", "candidate", "samples", "confidence", "burrows_delta", "verdict"]
+        csv_rows = [
+            [
+                rank,
+                cand_fp.label,
+                cand_fp.sample_count,
+                f"{comp.cosine_similarity * 100:.1f}%",
+                f"{comp.manhattan_delta:.3f}",
+                comp.same_author_likelihood.replace("_", " ").title(),
+            ]
+            for rank, (cand_fp, comp) in enumerate(candidate_scores[:top_k], start=1)
+        ]
+        print_csv_rows(csv_headers, csv_rows)
+        return
+
+    color = "green" if best_sim_pct >= 80 else ("yellow" if best_sim_pct >= 60 else "red")
+    margin_text = ""
+    if margin is not None:
         margin_text = (
             f"\nMargin: [bold]+{margin:.1f}%[/bold] lead over 2nd place "
             f"([cyan]{runner_up_fp.label}[/cyan] at {runner_up_pct:.1f}%)"
@@ -763,20 +1129,88 @@ def identify(
     console.print(table)
 
     if not no_report:
-        output.mkdir(parents=True, exist_ok=True)
-        safe_name = best_candidate_fp.label.replace(" ", "_")
-        pdf_path = output / f"identify_{path.stem}_{safe_name}.pdf"
-        generate_comparison_report(best_comp, best_candidate_fp, essay_fp, pdf_path)
         console.print(f"\n  📋 Comparison report with top candidate saved: [cyan]{pdf_path}[/cyan]")
 
 
 @app.command(name="list")
-def list_fingerprints():
+def list_fingerprints(
+    format: str = typer.Option(
+        "table",
+        "--format",
+        "-f",
+        help="Output format: 'table' (default), 'json', or 'csv'.",
+    ),
+    json: bool = typer.Option(False, "--json", help="Alias for --format json."),
+):
     """List all enrolled author profiles, sample counts, and baseline consistency."""
+    out_format = "json" if json else format.lower()
+    if out_format not in ("table", "json", "csv"):
+        console.print(
+            f"[bold red]Error:[/] Invalid format '{out_format}'. Must be 'table', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
     store = get_store()
     profiles = store.list_profiles()
     if not profiles:
-        console.print("No authors enrolled.")
+        if out_format == "json":
+            print_json_data([])
+        elif out_format == "csv":
+            csv_headers = ["author", "samples", "words", "author_type", "consistency", "top_trait"]
+            print_csv_rows(csv_headers, [])
+        else:
+            console.print("No authors enrolled.")
+        return
+
+    if out_format == "json":
+        data = []
+        for prof in profiles:
+            fp = prof.composite_fingerprint
+            cons = (
+                round(compute_profile_consistency(fp.axis_stability), 2)
+                if prof.sample_count > 1 and fp.axis_stability
+                else None
+            )
+            top_t = fp.standout_traits[0].get("feature", "") if fp.standout_traits else None
+            data.append(
+                {
+                    "author": prof.label,
+                    "samples": prof.sample_count,
+                    "words": prof.total_word_count,
+                    "author_type": fp.author_type.value,
+                    "consistency": cons,
+                    "top_trait": top_t,
+                }
+            )
+        print_json_data(data)
+        return
+
+    if out_format == "csv":
+        csv_headers = ["author", "samples", "words", "author_type", "consistency", "top_trait"]
+        csv_rows = []
+        for prof in profiles:
+            fp = prof.composite_fingerprint
+            cons_str = (
+                f"{compute_profile_consistency(fp.axis_stability):.1f}%"
+                if prof.sample_count > 1 and fp.axis_stability
+                else ""
+            )
+            top_t_str = (
+                fp.standout_traits[0].get("feature", "").replace(".", " › ")
+                if fp.standout_traits
+                else ""
+            )
+            csv_rows.append(
+                [
+                    prof.label,
+                    prof.sample_count,
+                    prof.total_word_count,
+                    fp.author_type.value,
+                    cons_str,
+                    top_t_str,
+                ]
+            )
+        print_csv_rows(csv_headers, csv_rows)
         return
 
     table = Table(
@@ -833,8 +1267,22 @@ def profile(
         "-o",
         help="Optional output directory to generate a PDF profile report.",
     ),
+    format: str = typer.Option(
+        "table",
+        "--format",
+        "-f",
+        help="Output format: 'table' (default), 'json', or 'csv'.",
+    ),
+    json: bool = typer.Option(False, "--json", help="Alias for --format json."),
 ):
     """Inspect an author's multi-sample profile, consistency, and rolling baseline."""
+    out_format = "json" if json else format.lower()
+    if out_format not in ("table", "json", "csv"):
+        console.print(
+            f"[bold red]Error:[/] Invalid format '{out_format}'. Must be 'table', 'json', or 'csv'."
+        )
+        raise typer.Exit(1)
+
     store = get_store()
     prof = store.get_profile(name)
     if not prof:
@@ -843,6 +1291,60 @@ def profile(
 
     fp = prof.composite_fingerprint
     samples = prof.samples
+    weights = calculate_sample_weights([s.word_count for s in samples]) if samples else []
+
+    if output:
+        output.mkdir(parents=True, exist_ok=True)
+        safe_name = prof.label.replace(" ", "_")
+        pdf_path = output / f"profile_{safe_name}.pdf"
+        generate_report(fp, pdf_path)
+
+    if out_format == "json":
+        consistency = (
+            round(compute_profile_consistency(fp.axis_stability), 2)
+            if prof.sample_count > 1 and fp.axis_stability
+            else None
+        )
+        data = {
+            "author": prof.label,
+            "samples_count": prof.sample_count,
+            "total_words": prof.total_word_count,
+            "author_type": fp.author_type.value,
+            "ai_confidence": round(fp.ai_confidence, 4),
+            "consistency": consistency,
+            "samples": [
+                {
+                    "index": i,
+                    "label": s.sample_label,
+                    "words": s.word_count,
+                    "enrolled_at": s.enrolled_at,
+                    "rolling_weight": round(w, 4),
+                }
+                for i, (s, w) in enumerate(zip(samples, weights), start=1)
+            ],
+            "axes": {k: round(v, 2) for k, v in fp.axes.items()},
+            "axis_stability": (
+                {k: round(v, 2) for k, v in fp.axis_stability.items()} if fp.axis_stability else {}
+            ),
+            "standout_traits": fp.standout_traits,
+        }
+        print_json_data(data)
+        return
+
+    if out_format == "csv":
+        csv_headers = ["sample_index", "sample_label", "words", "enrolled_at", "rolling_weight"]
+        csv_rows = [
+            [
+                i,
+                s.sample_label,
+                s.word_count,
+                s.enrolled_at,
+                f"{w * 100:.1f}%",
+            ]
+            for i, (s, w) in enumerate(zip(samples, weights), start=1)
+        ]
+        print_csv_rows(csv_headers, csv_rows)
+        return
 
     # Header Panel
     consistency_text = ""
@@ -955,10 +1457,6 @@ def profile(
     console.print()
 
     if output:
-        output.mkdir(parents=True, exist_ok=True)
-        safe_name = prof.label.replace(" ", "_")
-        pdf_path = output / f"profile_{safe_name}.pdf"
-        generate_report(fp, pdf_path)
         console.print(f"  📋 Profile report saved: [cyan]{pdf_path}[/cyan]\n")
 
 

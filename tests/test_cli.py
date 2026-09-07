@@ -48,7 +48,10 @@ def test_cli_analyze_with_json_and_pdf(tmp_path: Path):
         ],
     )
     assert result.exit_code == 0
-    assert "Report saved" in result.output
+    import json
+
+    data = json.loads(result.output)
+    assert data["label"] == "River_Sample"
     assert (out_dir / "River_Sample_fingerprint.pdf").exists()
 
 
@@ -374,3 +377,249 @@ def test_cli_multi_sample_enroll_and_profile(tmp_path: Path, monkeypatch):
     res_missing = runner.invoke(app, ["profile", "NonExistent"])
     assert res_missing.exit_code != 0
     assert "not enrolled" in res_missing.output
+
+
+def test_cli_analyze_formats(tmp_path: Path):
+    import csv
+    import json
+
+    f1 = tmp_path / "doc1.txt"
+    f2 = tmp_path / "doc2.txt"
+    f1.write_text("The silent forest shrouded the forgotten path under ancient oak trees.")
+    f2.write_text("Rapid rivers cut through the narrow granite canyons over countless centuries.")
+
+    # 1. Single file JSON
+    res_json = runner.invoke(app, ["analyze", str(f1), "--format", "json", "--no-report"])
+    assert res_json.exit_code == 0
+    data = json.loads(res_json.output)
+    assert data["word_count"] > 0
+    assert "axes" in data
+    assert "standout_traits" in data
+
+    # 2. Single file CSV
+    res_csv = runner.invoke(app, ["analyze", str(f1), "--format", "csv", "--no-report"])
+    assert res_csv.exit_code == 0
+    lines = list(csv.reader(res_csv.output.strip().splitlines()))
+    assert len(lines) == 2
+    assert "document" in lines[0]
+    assert lines[1][0] == "doc1.txt"
+
+    # 3. Batch Directory JSON
+    res_b_json = runner.invoke(app, ["analyze", str(tmp_path), "--format", "json", "--no-report"])
+    assert res_b_json.exit_code == 0
+    b_data = json.loads(res_b_json.output)
+    assert isinstance(b_data, list)
+    assert len(b_data) == 2
+    doc_names = {item["document"] for item in b_data}
+    assert doc_names == {"doc1.txt", "doc2.txt"}
+
+    # 4. Batch Directory CSV
+    res_b_csv = runner.invoke(app, ["analyze", str(tmp_path), "--format", "csv", "--no-report"])
+    assert res_b_csv.exit_code == 0
+    b_lines = list(csv.reader(res_b_csv.output.strip().splitlines()))
+    assert len(b_lines) == 3  # header + 2 docs
+    assert b_lines[0][0] == "document"
+    assert {b_lines[1][0], b_lines[2][0]} == {"doc1.txt", "doc2.txt"}
+
+    # 5. Invalid format
+    res_inv = runner.invoke(app, ["analyze", str(f1), "--format", "xml"])
+    assert res_inv.exit_code != 0
+    assert "Invalid format 'xml'" in res_inv.output
+
+
+def test_cli_identify_formats(tmp_path: Path, monkeypatch):
+    import csv
+    import json
+
+    import idiolect.store
+
+    test_db = tmp_path / "identify_formats.db"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    # Enroll authors
+    s_emily = tmp_path / "emily_train.txt"
+    s_emily.write_text(
+        "In the quiet laboratory, Eleanor observed the glowing crystals beneath the lens. "
+        "Her notes detailed the delicate luminescence shimmering across the glass."
+    )
+    runner.invoke(app, ["enroll", "Emily", str(s_emily)])
+
+    s_david = tmp_path / "david_train.txt"
+    s_david.write_text(
+        "Distributed database replication protocols must ensure serializable isolation levels. "
+        "Network partitioning triggers consensus quorums under Paxos invariants."
+    )
+    runner.invoke(app, ["enroll", "David", str(s_david)])
+
+    # Submissions
+    subs_dir = tmp_path / "submissions"
+    subs_dir.mkdir()
+    sub1 = subs_dir / "essay_emily.txt"
+    sub1.write_text(
+        "Eleanor continued examining the illuminated glass prisms in the silent laboratory, "
+        "recording each refractive measurement carefully in her leather notebook."
+    )
+    sub2 = subs_dir / "essay_david.txt"
+    sub2.write_text(
+        "Consensus voting during cluster network splits requires a majority quorum. "
+        "Replicated state machine logs preserve linearizable consistency."
+    )
+
+    # 1. Single file JSON
+    res_json = runner.invoke(app, ["identify", str(sub1), "--format", "json", "--no-report"])
+    assert res_json.exit_code == 0
+    data = json.loads(res_json.output)
+    assert data["essay"] == "essay_emily.txt"
+    assert data["top_match"] == "Emily"
+    assert len(data["candidates"]) == 2
+
+    # 2. Single file CSV
+    res_csv = runner.invoke(app, ["identify", str(sub1), "--format", "csv", "--no-report"])
+    assert res_csv.exit_code == 0
+    lines = list(csv.reader(res_csv.output.strip().splitlines()))
+    assert lines[0] == ["rank", "candidate", "samples", "confidence", "burrows_delta", "verdict"]
+    assert lines[1][1] == "Emily"
+
+    # 3. Batch Directory CSV (LMS mode)
+    res_b_csv = runner.invoke(app, ["identify", str(subs_dir), "--format", "csv", "--no-report"])
+    assert res_b_csv.exit_code == 0
+    b_lines = list(csv.reader(res_b_csv.output.strip().splitlines()))
+    assert b_lines[0] == [
+        "submission",
+        "words",
+        "top_match",
+        "confidence",
+        "burrows_delta",
+        "verdict",
+        "lead_margin",
+    ]
+    assert len(b_lines) == 3
+    submissions_matched = {row[0]: row[2] for row in b_lines[1:]}
+    assert submissions_matched["essay_emily.txt"] == "Emily"
+    assert submissions_matched["essay_david.txt"] == "David"
+
+    # 4. Batch Directory JSON
+    res_b_json = runner.invoke(app, ["identify", str(subs_dir), "--format", "json", "--no-report"])
+    assert res_b_json.exit_code == 0
+    b_data = json.loads(res_b_json.output)
+    assert len(b_data) == 2
+    b_map = {item["submission"]: item["top_match"] for item in b_data}
+    assert b_map["essay_emily.txt"] == "Emily"
+    assert b_map["essay_david.txt"] == "David"
+
+
+def test_cli_verify_and_compare_formats(tmp_path: Path, monkeypatch):
+    import csv
+    import json
+
+    import idiolect.store
+
+    test_db = tmp_path / "verify_formats.db"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    sample = tmp_path / "sample.txt"
+    sample.write_text("Philosophical treatises explore epistemic modalities and ontological truth.")
+    runner.invoke(app, ["enroll", "Socrates", str(sample)])
+
+    # Verify single JSON
+    res_v_json = runner.invoke(app, ["verify", "Socrates", str(sample), "--format", "json"])
+    assert res_v_json.exit_code == 0
+    v_data = json.loads(res_v_json.output)
+    assert v_data["author"] == "Socrates"
+    assert v_data["confidence"] > 90
+
+    # Verify single CSV
+    res_v_csv = runner.invoke(app, ["verify", "Socrates", str(sample), "--format", "csv"])
+    assert res_v_csv.exit_code == 0
+    v_lines = list(csv.reader(res_v_csv.output.strip().splitlines()))
+    assert v_lines[0] == ["document", "author", "words", "confidence", "burrows_delta", "verdict"]
+    assert v_lines[1][1] == "Socrates"
+
+    # Compare JSON & CSV
+    f1 = tmp_path / "f1.txt"
+    f2 = tmp_path / "f2.txt"
+    f1.write_text("The moon climbed over misty peaks as the night grew chill.")
+    f2.write_text("The silver moon crested the foggy mountaintops in the cold air.")
+
+    res_c_json = runner.invoke(
+        app, ["compare", str(f1), str(f2), "--format", "json", "--no-report"]
+    )
+    assert res_c_json.exit_code == 0
+    c_data = json.loads(res_c_json.output)
+    assert "similarity" in c_data
+    assert "axis_deltas" in c_data
+
+    res_c_csv = runner.invoke(app, ["compare", str(f1), str(f2), "--format", "csv", "--no-report"])
+    assert res_c_csv.exit_code == 0
+    c_lines = list(csv.reader(res_c_csv.output.strip().splitlines()))
+    assert c_lines[0] == ["axis", "delta"]
+
+
+def test_cli_list_and_profile_formats(tmp_path: Path, monkeypatch):
+    import csv
+    import json
+
+    import idiolect.store
+
+    test_db = tmp_path / "list_prof.db"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "idiolect.cli.get_store",
+        lambda db_path=None: idiolect.store.FingerprintStore(db_path=test_db),
+    )
+
+    # Empty list
+    res_empty_json = runner.invoke(app, ["list", "--format", "json"])
+    assert res_empty_json.exit_code == 0
+    assert json.loads(res_empty_json.output) == []
+
+    res_empty_csv = runner.invoke(app, ["list", "--format", "csv"])
+    assert res_empty_csv.exit_code == 0
+    assert "author,samples,words,author_type,consistency,top_trait" in res_empty_csv.output
+
+    # Enroll
+    s1 = tmp_path / "sample1.txt"
+    s1.write_text("The ancient parchment held secrets written in cryptographic ciphers.")
+    runner.invoke(app, ["enroll", "Scholar", str(s1)])
+
+    # List JSON
+    res_list_json = runner.invoke(app, ["list", "--format", "json"])
+    assert res_list_json.exit_code == 0
+    list_data = json.loads(res_list_json.output)
+    assert len(list_data) == 1
+    assert list_data[0]["author"] == "Scholar"
+
+    # List CSV
+    res_list_csv = runner.invoke(app, ["list", "--format", "csv"])
+    assert res_list_csv.exit_code == 0
+    csv_rows = list(csv.reader(res_list_csv.output.strip().splitlines()))
+    assert csv_rows[1][0] == "Scholar"
+
+    # Profile JSON
+    res_prof_json = runner.invoke(app, ["profile", "Scholar", "--format", "json"])
+    assert res_prof_json.exit_code == 0
+    prof_data = json.loads(res_prof_json.output)
+    assert prof_data["author"] == "Scholar"
+    assert prof_data["samples_count"] == 1
+    assert len(prof_data["samples"]) == 1
+
+    # Profile CSV
+    res_prof_csv = runner.invoke(app, ["profile", "Scholar", "--format", "csv"])
+    assert res_prof_csv.exit_code == 0
+    prof_rows = list(csv.reader(res_prof_csv.output.strip().splitlines()))
+    assert prof_rows[0] == [
+        "sample_index",
+        "sample_label",
+        "words",
+        "enrolled_at",
+        "rolling_weight",
+    ]
+    assert prof_rows[1][1] == "sample1.txt"

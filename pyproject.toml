@@ -25,6 +25,8 @@ dependencies = [
     "matplotlib>=3.8",
     # Data
     "numpy>=1.26",
+    "pypdf>=6.17.0",
+    "python-docx>=1.2.0",
 ]
 
 [project.optional-dependencies]
