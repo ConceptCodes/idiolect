@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "idiolect"
+version = "0.1.0"
+description = "Linguistic fingerprinting CLI — identify authorship and detect AI-generated content"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    # NLP Core
+    "spacy>=3.7,<4.0",
+    # Feature extraction
+    "lexicalrichness>=0.5",
+    "textstat>=0.7",
+    "wordfreq>=3.0",
+    "vaderSentiment>=3.3",
+    # CLI
+    "typer[all]>=0.12",
+    "rich>=13.0",
+    # PDF Report
+    "fpdf2>=2.8",
+    "matplotlib>=3.8",
+    # Data
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+idiolect = "idiolect.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/idiolect"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
