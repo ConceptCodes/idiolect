@@ -24,8 +24,8 @@ idiolect enroll "Student Name" known_sample.txt
 # Verify authorship against a specific enrolled student
 idiolect verify "Student Name" submitted_paper.txt
 
-# Guess/identify which enrolled student wrote an anonymous essay
-idiolect guess submission.txt
+# Identify which enrolled student wrote an anonymous essay
+idiolect identify submission.txt
 
 # List or manage enrolled authors
 idiolect list

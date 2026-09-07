@@ -132,7 +132,7 @@ def test_cli_store_lifecycle(tmp_path: Path, monkeypatch):
     assert res_delete_again.exit_code != 0
 
 
-def test_cli_guess_no_candidates(tmp_path: Path, monkeypatch):
+def test_cli_identify_no_candidates(tmp_path: Path, monkeypatch):
     test_db = tmp_path / "empty.db"
     import idiolect.store
 
@@ -143,12 +143,12 @@ def test_cli_guess_no_candidates(tmp_path: Path, monkeypatch):
 
     essay = tmp_path / "essay.txt"
     essay.write_text("An anonymous paper on thermodynamics and molecular kinetics.")
-    res = runner.invoke(app, ["guess", str(essay)])
+    res = runner.invoke(app, ["identify", str(essay)])
     assert res.exit_code != 0
     assert "No students or authors enrolled" in res.output
 
 
-def test_cli_guess_and_identify_success(tmp_path: Path, monkeypatch):
+def test_cli_identify_success(tmp_path: Path, monkeypatch):
     test_db = tmp_path / "students.db"
     import idiolect.store
 
@@ -180,15 +180,15 @@ def test_cli_guess_and_identify_success(tmp_path: Path, monkeypatch):
         "wondering if the whispers from the northern harbor could possibly be true."
     )
 
-    # Test guess
-    res_guess = runner.invoke(app, ["guess", str(unknown_essay)])
-    assert res_guess.exit_code == 0
-    assert "AUTHOR IDENTIFICATION / GUESS" in res_guess.output
-    assert "Top Guess: Alice" in res_guess.output
-    assert "Candidate Ranking" in res_guess.output
-    assert (tmp_path / "artifacts" / "guess_submission_Alice.pdf").exists()
-
-    # Test identify alias with --no-report
-    res_id = runner.invoke(app, ["identify", str(unknown_essay), "--no-report"])
+    # Test identify with PDF report
+    res_id = runner.invoke(app, ["identify", str(unknown_essay)])
     assert res_id.exit_code == 0
-    assert "Top Guess: Alice" in res_id.output
+    assert "AUTHOR IDENTIFICATION" in res_id.output
+    assert "Top Match: Alice" in res_id.output
+    assert "Candidate Ranking" in res_id.output
+    assert (tmp_path / "artifacts" / "identify_submission_Alice.pdf").exists()
+
+    # Test identify with --no-report
+    res_no_rep = runner.invoke(app, ["identify", str(unknown_essay), "--no-report"])
+    assert res_no_rep.exit_code == 0
+    assert "Top Match: Alice" in res_no_rep.output

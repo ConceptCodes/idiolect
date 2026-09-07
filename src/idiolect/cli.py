@@ -297,10 +297,10 @@ def verify(
 
 
 @app.command()
-def guess(
+def identify(
     file: Path = typer.Argument(
         ...,
-        help="Path to the essay/text file whose author to guess.",
+        help="Path to the essay/text file whose author to identify.",
         exists=True,
         file_okay=True,
         dir_okay=False,
@@ -319,7 +319,7 @@ def guess(
         False, "--no-report", help="Skip generating a PDF comparison report for the top match."
     ),
 ):
-    """Guess which enrolled student/author wrote an essay based on stylometric similarity."""
+    """Identify which enrolled student/author wrote an essay based on stylometric similarity."""
     store = get_store()
     enrolled_candidates = store.get_all()
 
@@ -368,14 +368,12 @@ def guess(
     header_text = (
         f"📄 Essay: [bold]{file.name}[/bold] ({essay_fp.word_count:,} words)\n"
         f"👥 Enrolled Candidates Evaluated: {len(enrolled_candidates)}\n\n"
-        f"🏆 Top Guess: [{color} bold]{best_candidate_fp.label}[/]\n"
+        f"🏆 Top Match: [{color} bold]{best_candidate_fp.label}[/]\n"
         f"Match Confidence: [{color} bold]{best_sim_pct:.1f}%[/] "
         f"({best_comp.same_author_likelihood.replace('_', ' ').title()})"
         f"{margin_text}"
     )
-    console.print(
-        Panel(header_text, title="AUTHOR IDENTIFICATION / GUESS", expand=False, padding=(1, 2))
-    )
+    console.print(Panel(header_text, title="AUTHOR IDENTIFICATION", expand=False, padding=(1, 2)))
 
     # Candidate table
     table = Table(
@@ -404,36 +402,9 @@ def guess(
     if not no_report:
         output.mkdir(parents=True, exist_ok=True)
         safe_name = best_candidate_fp.label.replace(" ", "_")
-        pdf_path = output / f"guess_{file.stem}_{safe_name}.pdf"
+        pdf_path = output / f"identify_{file.stem}_{safe_name}.pdf"
         generate_comparison_report(best_comp, best_candidate_fp, essay_fp, pdf_path)
         console.print(f"\n  📋 Comparison report with top candidate saved: [cyan]{pdf_path}[/cyan]")
-
-
-@app.command(name="identify")
-def identify(
-    file: Path = typer.Argument(
-        ...,
-        help="Path to the essay/text file whose author to guess.",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-    ),
-    top_k: int = typer.Option(
-        5, "--top-k", "-k", help="Maximum number of candidate matches to display."
-    ),
-    output: Path = typer.Option(
-        Path("artifacts"),
-        "--output",
-        "-o",
-        help="Output directory for the PDF comparison report (default: 'artifacts').",
-    ),
-    no_report: bool = typer.Option(
-        False, "--no-report", help="Skip generating a PDF comparison report for the top match."
-    ),
-):
-    """Alias for 'guess' — identify which enrolled student/author wrote an essay."""
-    return guess(file=file, top_k=top_k, output=output, no_report=no_report)
 
 
 @app.command(name="list")
